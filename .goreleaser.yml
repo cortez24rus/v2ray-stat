@@ -1,0 +1,48 @@
+# .goreleaser.yml
+builds:
+  - env:
+      - CGO_ENABLED=1 # Включаем CGO для github.com/mattn/go-sqlite3
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm64
+    main: ./main.go
+    binary: xcore
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .Binary }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - .env # Включаем пример конфигурации
+    replacements:
+      darwin: macos
+      amd64: x86_64
+
+release:
+  github:
+    owner: cortez24rus
+    name: xcore
+  extra_files:
+    - glob: ./LICENSE
+    - glob: ./README.md
+    - glob: ./.env
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
