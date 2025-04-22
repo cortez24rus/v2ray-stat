@@ -1,0 +1,49 @@
+name: Compile and Release xCore
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # Позволяет запускать вручную для тестирования
+
+permissions:
+  contents: write # Необходим для создания релиза
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.2" # Соответствует версии в go.mod
+
+      - name: Run Tests
+        run: go test -v ./...
+
+  release:
+    needs: test # Запускается только после успешного прохождения тестов
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Необходим для генерации CHANGELOG
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.2"
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
