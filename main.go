@@ -993,9 +993,11 @@ func checkExpiredSubscriptions(memDB *sql.DB) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end")
+	now := time.Now()
+
+	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
 	if err != nil {
-		log.Println("Ошибка при получении данных из БД:", err)
+		log.Println("Ошибка при запросе к БД:", err)
 		return
 	}
 	defer rows.Close()
@@ -1009,7 +1011,6 @@ func checkExpiredSubscriptions(memDB *sql.DB) {
 	}
 	var subscriptions []subscription
 
-	now := time.Now()
 	for rows.Next() {
 		var s subscription
 		err := rows.Scan(&s.Email, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
@@ -1151,6 +1152,16 @@ func usersHandler(memDB *sql.DB) http.HandlerFunc {
 	}
 }
 
+// contains вспомогательная функция для проверки, является ли столбец трафиковым
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 // statsHandler возвращает статистику сервера и клиентов
 func statsHandler(memDB *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1172,10 +1183,80 @@ func statsHandler(memDB *sql.DB) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
+		// Функция для форматирования таблицы
+		formatTable := func(rows *sql.Rows, trafficColumns []string) (string, error) {
+			columns, err := rows.Columns()
+			if err != nil {
+				return "", fmt.Errorf("ошибка получения названий столбцов: %v", err)
+			}
+
+			// Вычисляем максимальную ширину для каждого столбца
+			maxWidths := make([]int, len(columns))
+			for i, col := range columns {
+				maxWidths[i] = len(col) // Изначально ширина равна длине заголовка
+			}
+
+			// Собираем данные из строк
+			var data [][]string
+			for rows.Next() {
+				values := make([]interface{}, len(columns))
+				valuePtrs := make([]interface{}, len(columns))
+				for i := range columns {
+					valuePtrs[i] = &values[i]
+				}
+
+				if err := rows.Scan(valuePtrs...); err != nil {
+					return "", fmt.Errorf("ошибка сканирования строки: %v", err)
+				}
+
+				// Преобразуем значения в строки и обновляем maxWidths
+				row := make([]string, len(columns))
+				for i, val := range values {
+					strVal := fmt.Sprintf("%v", val)
+					row[i] = strVal
+					if len(strVal) > maxWidths[i] {
+						maxWidths[i] = len(strVal) // Обновляем ширину, если значение длиннее
+					}
+				}
+				data = append(data, row)
+			}
+
+			// Формируем заголовок
+			var header strings.Builder
+			for i, col := range columns {
+				header.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, col)) // Выравнивание по левому краю
+			}
+			header.WriteString("\n")
+
+			// Формируем разделительную линию
+			var separator strings.Builder
+			for _, width := range maxWidths {
+				separator.WriteString(strings.Repeat("-", width) + "  ") // 2 пробела между столбцами
+			}
+			separator.WriteString("\n")
+
+			// Формируем строки данных
+			var table strings.Builder
+			table.WriteString(header.String())
+			table.WriteString(separator.String())
+			for _, row := range data {
+				for i, val := range row {
+					if contains(trafficColumns, columns[i]) {
+						// Трафиковые колонки — выравнивание по правому краю
+						table.WriteString(fmt.Sprintf("%*s  ", maxWidths[i], val))
+					} else {
+						// Остальные колонки — выравнивание по левому краю
+						table.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, val))
+					}
+				}
+				table.WriteString("\n")
+			}
+
+			return table.String(), nil
+		}
+
 		// Статистика сервера
 		stats := " 🌐 Статистика сервера:\n============================\n"
-		stats += fmt.Sprintf("%-10s %-10s %-10s %-10s %-10s\n", "Source", "Sess Up", "Sess Down", "Upload", "Download")
-		stats += "-----------------------------------------------------\n"
 
 		// Запрос статистики сервера
 		rows, err := memDB.Query(`
@@ -1213,33 +1294,28 @@ func statsHandler(memDB *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		// Обрабатываем строки статистики сервера
-		for rows.Next() {
-			var source, sessUp, sessDown, upload, download string
-			if err := rows.Scan(&source, &sessUp, &sessDown, &upload, &download); err != nil {
-				log.Printf("Ошибка чтения результата: %v", err)
-				http.Error(w, "Ошибка обработки данных", http.StatusInternalServerError)
-				return
-			}
-			stats += fmt.Sprintf("%-10s %-10s %-10s %-10s %-10s\n", source, sessUp, sessDown, upload, download)
+		// Список трафиковых колонок для выравнивания по правому краю
+		trafficColsServer := []string{"Sess Up", "Sess Down", "Upload", "Download"}
+
+		// Форматируем таблицу для статистики сервера
+		serverTable, err := formatTable(rows, trafficColsServer)
+		if err != nil {
+			log.Printf("Ошибка форматирования таблицы: %v", err)
+			http.Error(w, "Ошибка обработки данных", http.StatusInternalServerError)
+			return
 		}
+		stats += serverTable
 
 		// Статистика клиентов
 		stats += "\n 📊 Статистика клиентов:\n============================\n"
-		// Добавляем заголовок для столбца Renew после Sub_end
-		stats += fmt.Sprintf("%-12s %-9s %-8s %-14s %-8s %-10s %-10s %-10s %-10s %-6s %s\n",
-			"Email", "Status", "Enabled", "Sub_end", "Renew", "Sess Up", "Sess Down", "Uplink", "Downlink", "LimIP", "IP")
-		stats += "---------------------------------------------------------------------------------------------------------------------------\n"
 
-		// Запрос статистики клиентов с добавлением столбца renew
+		// Запрос статистики клиентов
 		rows, err = memDB.Query(`
             SELECT email AS "Email",
                 status AS "Status",
                 enabled AS "Enabled",
                 sub_end AS "Sub end",
                 renew AS "Renew",
-                ips AS "Ips",
-                lim_ip AS "Lim_ip",
                 CASE
                     WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
                     WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
@@ -1263,7 +1339,9 @@ func statsHandler(memDB *sql.DB) http.HandlerFunc {
                     WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
                     WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
                     ELSE printf('%d B', downlink)
-                END AS "Downlink"
+                END AS "Downlink",
+                lim_ip AS "Lim_ip",
+                ips AS "Ips"
             FROM clients_stats;
         `)
 		if err != nil {
@@ -1273,20 +1351,17 @@ func statsHandler(memDB *sql.DB) http.HandlerFunc {
 		}
 		defer rows.Close()
 
-		// Обрабатываем строки статистики клиентов
-		for rows.Next() {
-			var email, status, enabled, sub_end, sessUp, sessDown, uplink, downlink, ipLimit, ips string
-			var renew int // Переменная для столбца renew (тип INTEGER)
-			if err := rows.Scan(&email, &status, &enabled, &sub_end, &renew, &ips, &ipLimit, &sessUp, &sessDown, &uplink, &downlink); err != nil {
-				log.Printf("Ошибка чтения результата: %v", err)
-				http.Error(w, "Ошибка обработки данных", http.StatusInternalServerError)
-				return
-			}
+		// Список трафиковых колонок для клиентов
+		trafficColsClients := []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
 
-			// Формируем строку клиента с добавлением значения renew
-			stats += fmt.Sprintf("%-12s %-9s %-8s %-14s %-8d %-10s %-10s %-10s %-10s %-6s %s\n",
-				email, status, enabled, sub_end, renew, sessUp, sessDown, uplink, downlink, ipLimit, ips)
+		// Форматируем таблицу для статистики клиентов
+		clientTable, err := formatTable(rows, trafficColsClients)
+		if err != nil {
+			log.Printf("Ошибка форматирования таблицы: %v", err)
+			http.Error(w, "Ошибка обработки данных", http.StatusInternalServerError)
+			return
 		}
+		stats += clientTable
 
 		// Отправляем статистику клиенту
 		fmt.Fprintln(w, stats)
@@ -1384,12 +1459,12 @@ func updateIPLimitHandler(memDB *sql.DB) http.HandlerFunc {
 		}
 
 		// Извлекаем параметры
-		username := r.FormValue("username")
+		email := r.FormValue("email")
 		ipLimit := r.FormValue("lim_ip")
 
 		// Проверяем, что параметры не пустые
-		if username == "" || ipLimit == "" {
-			http.Error(w, "Неверные параметры. Используйте username и lim_ip", http.StatusBadRequest)
+		if email == "" || ipLimit == "" {
+			http.Error(w, "Неверные параметры. Используйте email и lim_ip", http.StatusBadRequest)
 			return
 		}
 
@@ -1410,7 +1485,7 @@ func updateIPLimitHandler(memDB *sql.DB) http.HandlerFunc {
 
 		// Выполняем обновление в базе данных
 		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
-		result, err := memDB.Exec(query, ipLimit, username)
+		result, err := memDB.Exec(query, ipLimit, email)
 		if err != nil {
 			http.Error(w, "Ошибка обновления lim_ip", http.StatusInternalServerError)
 			return
@@ -1418,13 +1493,13 @@ func updateIPLimitHandler(memDB *sql.DB) http.HandlerFunc {
 
 		rowsAffected, _ := result.RowsAffected()
 		if rowsAffected == 0 {
-			http.Error(w, fmt.Sprintf("Пользователь '%s' не найден", username), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Пользователь '%s' не найден", email), http.StatusNotFound)
 			return
 		}
 
 		// Ответ о успешном обновлении
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "lim_ip для '%s' обновлен до '%s'\n", username, ipLimit)
+		fmt.Fprintf(w, "lim_ip для '%s' обновлен до '%s'\n", email, ipLimit)
 	}
 }
 
@@ -1519,55 +1594,56 @@ func adjustDateOffsetHandler(memDB *sql.DB) http.HandlerFunc {
 			http.Error(w, "Неверный метод. Используйте PATCH", http.StatusMethodNotAllowed)
 			return
 		}
-
 		if memDB == nil {
 			http.Error(w, "База данных не инициализирована", http.StatusInternalServerError)
 			return
 		}
-
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "Ошибка парсинга данных", http.StatusBadRequest)
 			return
 		}
-
 		email := r.FormValue("email")
-		offset := r.FormValue("offset")
-
-		if email == "" || offset == "" {
-			http.Error(w, "email и offset обязательны", http.StatusBadRequest)
+		sub_end := r.FormValue("sub_end")
+		if email == "" || sub_end == "" {
+			http.Error(w, "email и sub_end обязательны", http.StatusBadRequest)
 			return
 		}
 
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		baseDate := time.Now().UTC()
-
 		var subEndStr string
 		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", email).Scan(&subEndStr)
 		if err != nil && err != sql.ErrNoRows {
-			http.Error(w, "Ошибка запросы к БД", http.StatusInternalServerError)
+			dbMutex.Unlock()
+			log.Println("Ошибка запроса к БД:", err)
+			http.Error(w, "Ошибка запроса к БД", http.StatusInternalServerError)
 			return
 		}
-
 		if subEndStr != "" {
 			baseDate, err = time.Parse("2006-01-02-15", subEndStr)
 			if err != nil {
+				dbMutex.Unlock()
+				log.Println("Ошибка парсинга sub_end:", err)
 				http.Error(w, "Ошибка парсинга sub_end", http.StatusInternalServerError)
 				return
 			}
 		}
+		err = adjustDateOffset(memDB, email, sub_end, baseDate)
+		dbMutex.Unlock() // Разблокируем мьютекс перед запуском горутины
 
-		err = adjustDateOffset(memDB, email, offset, baseDate)
 		if err != nil {
+			log.Println("Ошибка при обновлении даты:", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		checkExpiredSubscriptions(memDB)
+		// Запускаем проверку истёкших подписок асинхронно
+		go func() {
+			checkExpiredSubscriptions(memDB)
+		}()
 
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "Дата подписки для %s обновлена с offset %s\n", email, offset)
+		fmt.Fprintf(w, "Дата подписки для %s обновлена с sub_end %s\n", email, sub_end)
 	}
 }
 
