@@ -47,8 +47,8 @@ var defaultConfig = Config{
 	XIPLLogFile:      "/var/log/xipl.log",
 	Port:             "9952",
 	IP_TTL:           66 * time.Second,
-	TelegramBotToken: "7158543940:AAHqVTxxc2AekT3FZPGXS1Ac7N5xov23C9U",
-	TelegramChatID:   "306100972",
+	TelegramBotToken: "",
+	TelegramChatID:   "",
 }
 
 var config Config
@@ -57,7 +57,6 @@ var (
 	uniqueEntries       = make(map[string]map[string]time.Time)
 	uniqueEntriesMutex  sync.Mutex
 	renewNotifiedUsers  = make(map[string]bool)
-	renewNotifiedMutex  sync.Mutex
 	dbMutex             sync.Mutex
 	previousStats       string
 	clientPreviousStats string
@@ -73,7 +72,6 @@ var (
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
 )
 
-// sendTelegramNotification отправляет уведомление в Telegram
 func sendTelegramNotification(token, chatID, message string) error {
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage?parse_mode=markdown", token)
 	data := url.Values{
@@ -83,11 +81,13 @@ func sendTelegramNotification(token, chatID, message string) error {
 
 	resp, err := http.PostForm(apiURL, data)
 	if err != nil {
+		log.Printf("Ошибка отправки уведомления в Telegram: %v", err)
 		return fmt.Errorf("ошибка отправки уведомления: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("Не удалось отправить уведомление в Telegram, статус: %d", resp.StatusCode)
 		return fmt.Errorf("не удалось отправить уведомление, статус: %d", resp.StatusCode)
 	}
 
@@ -149,6 +149,12 @@ func loadConfig(configFile string) error {
 			return fmt.Errorf("некорректный порт: %s", val)
 		}
 		config.Port = val
+	}
+	if val, ok := configMap["TelegramBotToken"]; ok && val != "" {
+		config.TelegramBotToken = val
+	}
+	if val, ok := configMap["TelegramChatID"]; ok && val != "" {
+		config.TelegramChatID = val
 	}
 
 	return nil
@@ -1016,6 +1022,23 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64) {
 	*offset = pos
 }
 
+func formatDate(subEnd string) string {
+	// Используем локальный часовой пояс сервера
+	t, err := time.ParseInLocation("2006-01-02-15", subEnd, time.Local)
+	if err != nil {
+		log.Printf("Ошибка парсинга даты %s: %v", subEnd, err)
+		return subEnd // Возвращаем исходную строку при ошибке
+	}
+
+	// Получаем смещение часового пояса в секундах
+	_, offsetSeconds := t.Zone()
+	// Конвертируем смещение в часы
+	offsetHours := offsetSeconds / 3600
+
+	// Форматируем дату с часовым поясом
+	return fmt.Sprintf("%s UTC%+d", t.Format("2006.01.02 15:04"), offsetHours)
+}
+
 // checkExpiredSubscriptions проверяет истекшие подписки и обновляет статус
 func checkExpiredSubscriptions(memDB *sql.DB, botToken, chatID string) {
 	dbMutex.Lock()
@@ -1063,13 +1086,18 @@ func checkExpiredSubscriptions(memDB *sql.DB, botToken, chatID string) {
 			}
 
 			if subEnd.Before(now) {
+				canSendNotifications := botToken != "" && chatID != ""
+
 				notifiedMutex.Lock()
-				if !notifiedUsers[s.Email] {
+				if canSendNotifications && !notifiedUsers[s.Email] {
+					formattedDate := formatDate(s.SubEnd)
 					// Формируем сообщение для Telegram
-					message := fmt.Sprintf("❌ Подписка истекла для пользователя: *%s* \n⏳ Дата окончания: *%s*", s.Email, s.SubEnd)
-					err := sendTelegramNotification(botToken, chatID, message)
-					if err != nil {
-						log.Printf("Ошибка отправки уведомления для %s: %v", s.Email, err)
+					message := fmt.Sprintf("❌ Subscription expired\n"+
+						"-------------------------------------------------------------------------\n"+
+						" Client:                     *%s*\n"+
+						" Expiration date:   *%s*", s.Email, formattedDate)
+					if err := sendTelegramNotification(botToken, chatID, message); err == nil {
+						notifiedUsers[s.Email] = true
 					}
 				}
 				notifiedMutex.Unlock()
@@ -1083,30 +1111,21 @@ func checkExpiredSubscriptions(memDB *sql.DB, botToken, chatID string) {
 					}
 					log.Printf("Автопродление подписки пользователя %s на %d", s.Email, s.Renew)
 
-					// Проверяем, было ли уже отправлено уведомление о продлении
-					renewNotifiedMutex.Lock()
-					if !renewNotifiedUsers[s.Email] {
+					if canSendNotifications {
 						// Формируем сообщение для Telegram об автопродлении
-						message := fmt.Sprintf("✅ Автопродление подписки для пользователя: *%s* \n⏳ Продлена на: *%d дней*", s.Email, s.Renew)
-						err = sendTelegramNotification(botToken, chatID, message)
-						if err != nil {
-							log.Printf("Ошибка отправки уведомления о продлении для %s: %v", s.Email, err)
-						} else {
+						message := fmt.Sprintf("✅ Subscription renewed\n"+
+							"-------------------------------------------------------------------------\n"+
+							" Client:                     *%s*\n"+
+							" Renewed for:        *%d days*\n", s.Email, s.Renew)
+						if err := sendTelegramNotification(botToken, chatID, message); err == nil {
 							renewNotifiedUsers[s.Email] = true
 						}
 					}
-					renewNotifiedMutex.Unlock()
 
 					notifiedMutex.Lock()
 					notifiedUsers[s.Email] = false // Сбрасываем уведомление при продлении
+					renewNotifiedUsers[s.Email] = false
 					notifiedMutex.Unlock()
-
-					// Формируем сообщение для Telegram об автопродлении
-					message := fmt.Sprintf("✅ Автопродление подписки для пользователя %s \n⏳ Продлена на: %d дней", s.Email, s.Renew)
-					err = sendTelegramNotification(botToken, chatID, message)
-					if err != nil {
-						log.Printf("Ошибка отправки уведомления о продлении для %s: %v", s.Email, err)
-					}
 
 					// Включаем пользователя, если он был отключен
 					if s.Enabled == "false" {
@@ -2136,7 +2155,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(5 * time.Minute)
+		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
