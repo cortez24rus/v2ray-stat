@@ -1092,9 +1092,8 @@ func checkExpiredSubscriptions(memDB *sql.DB, botToken, chatID string) {
 				if canSendNotifications && !notifiedUsers[s.Email] {
 					formattedDate := formatDate(s.SubEnd)
 					// Формируем сообщение для Telegram
-					message := fmt.Sprintf("❌ Subscription expired\n"+
-						"-------------------------------------------------------------------------\n"+
-						" Client:                     *%s*\n"+
+					message := fmt.Sprintf("❌ Subscription expired\n\n"+
+						" Client:   *%s*\n"+
 						" Expiration date:   *%s*", s.Email, formattedDate)
 					if err := sendTelegramNotification(botToken, chatID, message); err == nil {
 						notifiedUsers[s.Email] = true
@@ -1113,10 +1112,9 @@ func checkExpiredSubscriptions(memDB *sql.DB, botToken, chatID string) {
 
 					if canSendNotifications {
 						// Формируем сообщение для Telegram об автопродлении
-						message := fmt.Sprintf("✅ Subscription renewed\n"+
-							"-------------------------------------------------------------------------\n"+
-							" Client:                     *%s*\n"+
-							" Renewed for:        *%d days*\n", s.Email, s.Renew)
+						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
+							" Client:   *%s*\n"+
+							" Renewed for:   *%d days*\n", s.Email, s.Renew)
 						if err := sendTelegramNotification(botToken, chatID, message); err == nil {
 							renewNotifiedUsers[s.Email] = true
 						}
