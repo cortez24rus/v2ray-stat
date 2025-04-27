@@ -1,30 +1,16 @@
-# .goreleaser.yml
 builds:
   - binary: xcore
     goos:
       - linux
     goarch:
       - amd64
-      - arm64
     env:
-      - CGO_ENABLED=0 # Включаем CGO=1 для github.com/mattn/go-sqlite3
+      - CGO_ENABLED=1
     flags:
       - -mod=vendor
-    #main: ./main.go
 
 release:
   prerelease: auto
-
-brews:
-  -
-    name: XCore-go
-    homepage: https://github.com/cortez24rus/XCore-go
-    tap:
-      owner: cortez24rus
-      name: XCore-go
-    commit_author:
-      name: cortez24rus
-      email: cortez24rus@example.com
 
 checksum:
   name_template: 'checksums.txt'
