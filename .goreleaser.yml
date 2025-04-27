@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 before:
   hooks:
@@ -11,6 +11,7 @@ checksum:
 
 builds:
   - id: build
+    main: ./main.go
     binary: xcore
     env:
       - CGO_ENABLED=1
