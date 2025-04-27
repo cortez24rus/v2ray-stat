@@ -3,39 +3,59 @@ name: Build & Release
 
 on:
   push:
-    # run only against tags
     tags:
-      - "*"
-
-permissions:
-  contents: write
-  # packages: write
-  # issues: write
-  # id-token: write
+      - 'v*'  # any tag like v1.0.0 :contentReference[oaicite:0]{index=0}
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-latest     # GitHub-hosted standard runner :contentReference[oaicite:1]{index=1}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]   # build for both Intel and ARM :contentReference[oaicite:2]{index=2}
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-      # More assembly might be required: Docker logins, GPG, etc.
-      # It all depends on your needs.
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
-          distribution: goreleaser
-          # 'latest', 'nightly', or a semver
-          version: "{{ env.GUTHUB_REF_NAME}}"
-          args: release --clean
+          go-version: stable    # installs latest stable Go :contentReference[oaicite:3]{index=3}
+          cache: false          # disable module caching if you prefer
+
+      - name: Build and package ${{ matrix.arch }}
+        run: |
+          # cross-compile with CGO (required by sqlite3) & use vendor dir :contentReference[oaicite:4]{index=4}
+          env CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.arch }} \
+            go build -mod=vendor -o xcore-linux-${{ matrix.arch }} ./main.go
+          tar czf xcore-linux-${{ matrix.arch }}.tar.gz \
+            xcore-linux-${{ matrix.arch }}
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
-          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
-          # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+        with:
+          tag_name:    ${{ github.ref_name }}       # uses your pushed tag :contentReference[oaicite:5]{index=5}
+          release_name: Release ${{ github.ref_name }}
+          draft:        false
+          prerelease:   false
+
+      - name: Upload amd64 binary
+        if: matrix.arch == 'amd64'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url:    ${{ steps.create_release.outputs.upload_url }}  # from previous step :contentReference[oaicite:6]{index=6}
+          asset_path:    xcore-linux-amd64.tar.gz
+          asset_name:    xcore-linux-amd64.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload arm64 binary
+        if: matrix.arch == 'arm64'
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url:    ${{ steps.create_release.outputs.upload_url }}
+          asset_path:    xcore-linux-arm64.tar.gz
+          asset_name:    xcore-linux-arm64.tar.gz
+          asset_content_type: application/gzip
