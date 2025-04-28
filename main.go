@@ -1,7 +1,7 @@
 // Copyright (c) 2025 xCore Authors
 // This file is part of xCore.
 // xCore is licensed under the xCore Software License. See the LICENSE file for details.
-// e
+
 package main
 
 import (
@@ -29,11 +29,14 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+var Version string // Версия программы, задаётся при сборке
+
 type Config struct {
 	DatabasePath     string
 	DirXray          string
 	LUAFilePath      string
 	XIPLLogFile      string
+	BannedLogFile    string
 	IP_TTL           time.Duration
 	Port             string
 	TelegramBotToken string
@@ -44,7 +47,8 @@ var defaultConfig = Config{
 	LUAFilePath:      "/etc/haproxy/.auth.lua",
 	DatabasePath:     "/usr/local/xcore/data.db",
 	DirXray:          "/usr/local/etc/xray/",
-	XIPLLogFile:      "/var/log/xipl.log",
+	XIPLLogFile:      "/var/log/xcore.log",
+	BannedLogFile:    "/var/log/xcore-banned.log",
 	Port:             "9952",
 	IP_TTL:           66 * time.Second,
 	TelegramBotToken: "",
@@ -70,6 +74,7 @@ var (
 	accessLogRegex  = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
 	luaRegex        = regexp.MustCompile(`\["([a-f0-9-]+)"\] = (true|false)`)
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
+	bannedLogRegex  = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+(BAN|UNBAN)\s+\[Email\] = (\S+)\s+\[IP\] = (\S+)(?:\s+banned for (\d+) seconds\.)?`)
 )
 
 func sendTelegramNotification(token, chatID, message string) error {
@@ -142,6 +147,9 @@ func loadConfig(configFile string) error {
 	}
 	if val, ok := configMap["XIPLLogFile"]; ok && val != "" {
 		config.XIPLLogFile = val
+	}
+	if val, ok := configMap["BannedLogFile"]; ok && val != "" {
+		config.BannedLogFile = val
 	}
 	if val, ok := configMap["Port"]; ok && val != "" {
 		portNum, err := strconv.Atoi(val)
@@ -256,7 +264,7 @@ func initDB(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("ошибка выполнения SQL-запроса: %v", err)
 	}
-	fmt.Println("Database initialized successfully")
+	log.Printf("Database initialized successfully")
 	// Успешная инициализация базы данных
 	return nil
 }
@@ -1017,6 +1025,62 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64) {
 	pos, err := file.Seek(0, 1)
 	if err != nil {
 		log.Printf("Ошибка получения позиции файла: %v", err)
+		return
+	}
+	*offset = pos
+}
+
+// monitorBannedLog мониторит лог банов и отправляет уведомления в Telegram
+func monitorBannedLog(bannedLog *os.File, offset *int64) {
+	bannedLog.Seek(*offset, 0)
+	scanner := bufio.NewScanner(bannedLog)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		matches := bannedLogRegex.FindStringSubmatch(line)
+		if len(matches) < 5 {
+			log.Printf("Некорректная строка в логе банов: %s", line)
+			continue
+		}
+
+		timestamp := matches[1]
+		action := matches[2]
+		email := matches[3]
+		ip := matches[4]
+		banDuration := "unknown"
+		if len(matches) == 6 && matches[5] != "" {
+			banDuration = matches[5] + " seconds"
+		}
+
+		var message string
+		if action == "BAN" {
+			message = fmt.Sprintf("🚫 IP Banned\n\n"+
+				" Client:   *%s*\n"+
+				" IP:   *%s*\n"+
+				" Time:   *%s*\n"+
+				" Duration:   *%s*", email, ip, timestamp, banDuration)
+		} else {
+			message = fmt.Sprintf("✅ IP Unbanned\n\n"+
+				" Client:   *%s*\n"+
+				" IP:   *%s*\n"+
+				" Time:   *%s*", email, ip, timestamp)
+		}
+
+		if config.TelegramBotToken != "" && config.TelegramChatID != "" {
+			if err := sendTelegramNotification(config.TelegramBotToken, config.TelegramChatID, message); err != nil {
+				log.Printf("Ошибка отправки уведомления о бане: %v", err)
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("Ошибка чтения лога банов: %v", err)
+	}
+
+	// Обновляем позицию в файле
+	pos, err := bannedLog.Seek(0, 1)
+	if err != nil {
+		log.Printf("Ошибка получения позиции лога банов: %v", err)
 		return
 	}
 	*offset = pos
@@ -2057,12 +2121,13 @@ func main() {
 	// Проверка лицензии
 	license.VerifyLicense()
 
-	fmt.Println("Starting xCore application...")
+	flag.Parse()
+
+	log.Printf("Starting xCore application, version %s", Version)
 	// Загружаем конфигурацию
 	if err := loadConfig(".env"); err != nil {
 		log.Fatalf("Ошибка загрузки конфигурации: %v", err)
 	}
-	flag.Parse()
 
 	// Проверяем, существует ли файл базы данных
 	_, err := os.Stat(config.DatabasePath)
@@ -2103,11 +2168,18 @@ func main() {
 	}
 
 	// Очищаем содержимое файла перед чтением
-	err = os.Truncate(config.DirXray+"access.log", 0)
-	if err != nil {
-		fmt.Println("Ошибка очистки файла:", err)
-		return
-	}
+	//	err = os.Truncate(config.DirXray+"access.log", 0)
+	//	if err != nil {
+	//		fmt.Println("Ошибка очистки файла:", err)
+	//		return
+	//	}
+
+	// Очищаем содержимое файла перед чтением
+	//	err = os.Truncate(config.BannedLogFile, 0)
+	//	if err != nil {
+	//		fmt.Println("Ошибка очистки файла:", err)
+	//		return
+	//	}
 
 	// Открываем файл access.log
 	accessLog, err := os.Open(config.DirXray + "access.log")
@@ -2115,6 +2187,29 @@ func main() {
 		log.Fatalf("Ошибка при открытии access.log: %v", err)
 	}
 	defer accessLog.Close()
+
+	// Открытие файла лога банов для чтения
+	bannedLog, err := os.Open(config.BannedLogFile)
+	if err != nil {
+		log.Fatalf("Ошибка открытия файла лога банов: %v", err)
+	}
+	defer bannedLog.Close()
+
+	// Инициализация позиции в файле лога
+	var offset int64
+	accessLog.Seek(0, 2) // Перемещение в конец файла
+	offset, err = accessLog.Seek(0, 1)
+	if err != nil {
+		log.Fatalf("Ошибка получения позиции в файле лога: %v", err)
+	}
+
+	// Инициализация позиции в файле лога банов
+	var bannedOffset int64
+	bannedLog.Seek(0, 2) // Перемещение в конец файла
+	bannedOffset, err = bannedLog.Seek(0, 1)
+	if err != nil {
+		log.Fatalf("Ошибка получения позиции в файле лога банов: %v", err)
+	}
 
 	// Создаём контекст для graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2188,7 +2283,6 @@ func main() {
 		defer wg.Done()
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
-		var offset int64 = 0
 		for {
 			select {
 			case <-ticker.C:
@@ -2210,6 +2304,7 @@ func main() {
 					updateClientStats(memDB, apiData)
 				}
 				readNewLines(memDB, accessLog, &offset)
+				monitorBannedLog(bannedLog, &bannedOffset)
 
 				// elapsed := time.Since(starttime)
 				// fmt.Printf("Время выполнения программы: %s\n", elapsed)
