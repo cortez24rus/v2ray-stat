@@ -27,6 +27,9 @@ import (
 	"xcore/license"
 
 	_ "github.com/mattn/go-sqlite3"
+	stats "github.com/xtls/xray-core/app/stats/command"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var Version string // Версия программы, задаётся при сборке
@@ -187,7 +190,7 @@ type ConfigXray struct {
 
 type Stat struct {
 	Name  string `json:"name"`
-	Value int    `json:"value"`
+	Value string `json:"value"` // Строковый тип для совместимости с gRPC
 }
 
 type ApiResponse struct {
@@ -500,18 +503,43 @@ func delUserFromDB(memDB *sql.DB, clients []Client) error {
 
 // getApiResponse получает статистику через API Xray
 func getApiResponse() (*ApiResponse, error) {
-	cmd := exec.Command(config.DirXray+"xray", "api", "statsquery")
-	output, err := cmd.CombinedOutput()
+	// Устанавливаем соединение с gRPC-сервером
+	conn, err := grpc.Dial("127.0.0.1:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, fmt.Errorf("ошибка выполнения команды: %w", err)
+		return nil, fmt.Errorf("ошибка подключения к gRPC-серверу: %w", err)
+	}
+	defer conn.Close()
+
+	// Создаем клиент gRPC
+	client := stats.NewStatsServiceClient(conn)
+
+	// Формируем запрос
+	req := &stats.QueryStatsRequest{
+		Pattern: "",
+		Reset_:  false,
 	}
 
-	var apiResponse ApiResponse
-	if err := json.Unmarshal(output, &apiResponse); err != nil {
-		return nil, fmt.Errorf("ошибка парсинга JSON: %w", err)
+	// Выполняем gRPC-запрос
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.QueryStats(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения gRPC-запроса: %w", err)
 	}
 
-	return &apiResponse, nil
+	// Преобразуем gRPC-ответ в ApiResponse
+	apiResponse := &ApiResponse{
+		Stat: make([]Stat, len(resp.GetStat())),
+	}
+	for i, stat := range resp.GetStat() {
+		apiResponse.Stat[i] = Stat{
+			Name:  stat.GetName(),
+			Value: strconv.FormatInt(stat.GetValue(), 10), // Преобразуем int64 в string
+		}
+	}
+
+	return apiResponse, nil
 }
 
 // extractProxyTraffic извлекает статистику трафика прокси
@@ -525,7 +553,7 @@ func extractProxyTraffic(apiData *ApiResponse) []string {
 
 		parts := splitAndCleanName(stat.Name)
 		if len(parts) > 0 {
-			result = append(result, fmt.Sprintf("%s %d", strings.Join(parts, " "), stat.Value))
+			result = append(result, fmt.Sprintf("%s %s", strings.Join(parts, " "), stat.Value))
 		}
 	}
 	return result
@@ -538,7 +566,7 @@ func extractUserTraffic(apiData *ApiResponse) []string {
 		if strings.Contains(stat.Name, "user") {
 			parts := splitAndCleanName(stat.Name)
 			if len(parts) > 0 {
-				result = append(result, fmt.Sprintf("%s %d", strings.Join(parts, " "), stat.Value))
+				result = append(result, fmt.Sprintf("%s %s", strings.Join(parts, " "), stat.Value))
 			}
 		}
 	}
