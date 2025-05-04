@@ -27,6 +27,9 @@ import (
 	"xcore/license"
 
 	_ "github.com/mattn/go-sqlite3"
+	stats "github.com/xtls/xray-core/app/stats/command"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var Version string // Версия программы, задаётся при сборке
@@ -187,7 +190,7 @@ type ConfigXray struct {
 
 type Stat struct {
 	Name  string `json:"name"`
-	Value int    `json:"value"`
+	Value string `json:"value"` // Строковый тип для совместимости с gRPC
 }
 
 type ApiResponse struct {
@@ -444,7 +447,7 @@ func addUserToDB(memDB *sql.DB, clients []Client) error {
 
 	// Вывод email-адресов добавленных пользователей
 	if len(addedEmails) > 0 {
-		fmt.Printf("Пользователи успешно добавлены в базу данных: %s\n", strings.Join(addedEmails, ", "))
+		log.Printf("Users successfully added to database: %s\n", strings.Join(addedEmails, ", "))
 	}
 
 	return nil
@@ -500,18 +503,43 @@ func delUserFromDB(memDB *sql.DB, clients []Client) error {
 
 // getApiResponse получает статистику через API Xray
 func getApiResponse() (*ApiResponse, error) {
-	cmd := exec.Command(config.DirXray+"xray", "api", "statsquery")
-	output, err := cmd.CombinedOutput()
+	// Устанавливаем соединение с gRPC-сервером
+	conn, err := grpc.Dial("127.0.0.1:9953", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, fmt.Errorf("ошибка выполнения команды: %w", err)
+		return nil, fmt.Errorf("ошибка подключения к gRPC-серверу: %w", err)
+	}
+	defer conn.Close()
+
+	// Создаем клиент gRPC
+	client := stats.NewStatsServiceClient(conn)
+
+	// Формируем запрос
+	req := &stats.QueryStatsRequest{
+		Pattern: "",
+		Reset_:  false,
 	}
 
-	var apiResponse ApiResponse
-	if err := json.Unmarshal(output, &apiResponse); err != nil {
-		return nil, fmt.Errorf("ошибка парсинга JSON: %w", err)
+	// Выполняем gRPC-запрос
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.QueryStats(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка выполнения gRPC-запроса: %w", err)
 	}
 
-	return &apiResponse, nil
+	// Преобразуем gRPC-ответ в ApiResponse
+	apiResponse := &ApiResponse{
+		Stat: make([]Stat, len(resp.GetStat())),
+	}
+	for i, stat := range resp.GetStat() {
+		apiResponse.Stat[i] = Stat{
+			Name:  stat.GetName(),
+			Value: strconv.FormatInt(stat.GetValue(), 10), // Преобразуем int64 в string
+		}
+	}
+
+	return apiResponse, nil
 }
 
 // extractProxyTraffic извлекает статистику трафика прокси
@@ -525,7 +553,7 @@ func extractProxyTraffic(apiData *ApiResponse) []string {
 
 		parts := splitAndCleanName(stat.Name)
 		if len(parts) > 0 {
-			result = append(result, fmt.Sprintf("%s %d", strings.Join(parts, " "), stat.Value))
+			result = append(result, fmt.Sprintf("%s %s", strings.Join(parts, " "), stat.Value))
 		}
 	}
 	return result
@@ -538,7 +566,7 @@ func extractUserTraffic(apiData *ApiResponse) []string {
 		if strings.Contains(stat.Name, "user") {
 			parts := splitAndCleanName(stat.Name)
 			if len(parts) > 0 {
-				result = append(result, fmt.Sprintf("%s %d", strings.Join(parts, " "), stat.Value))
+				result = append(result, fmt.Sprintf("%s %s", strings.Join(parts, " "), stat.Value))
 			}
 		}
 	}
@@ -2005,7 +2033,6 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 
 	// Ожидаем сигнала завершения
 	<-ctx.Done()
-	log.Println("Остановка API-сервера...")
 
 	// Создаем контекст с таймаутом для graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2015,7 +2042,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Ошибка при остановке сервера: %v", err)
 	}
-	log.Println("API-сервер успешно остановлен")
+	log.Println("API server stopped successfully")
 
 	// Уменьшаем счетчик WaitGroup только после полной остановки
 	wg.Done()
@@ -2244,7 +2271,7 @@ func main() {
 		}
 	}()
 
-	// Синхронизация данных каждые 5 минут
+	// Синхронизация данных каждые 10 минут
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2269,7 +2296,7 @@ func main() {
 				if err := syncToFileDB(memDB); err != nil {
 					log.Printf("Ошибка синхронизации: %v", err)
 				} else {
-					log.Println("База данных успешно синхронизирована.")
+					log.Println("Database synchronized successfully")
 				}
 			case <-ctx.Done():
 				return
@@ -2316,16 +2343,16 @@ func main() {
 
 	// Ожидание сигнала завершения
 	<-sigChan
-	log.Println("Получен сигнал завершения, сохраняем данные...")
+	log.Println("Received termination signal, saving data")
 	cancel() // Останавливаем все горутины
 
 	// Синхронизация данных перед завершением
 	if err := syncToFileDB(memDB); err != nil {
 		log.Printf("Ошибка синхронизации данных в fileDB: %v", err)
 	} else {
-		log.Println("Данные успешно сохранены в файл базы данных")
+		log.Println("Data successfully saved to database file")
 	}
 
 	wg.Wait()
-	log.Println("Программа завершена")
+	log.Println("Program completed")
 }
