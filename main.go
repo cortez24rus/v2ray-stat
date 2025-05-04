@@ -241,7 +241,7 @@ func initDB(db *sql.DB) error {
 	    created TEXT,
 	    sub_end TEXT DEFAULT '',
 	    renew INTEGER DEFAULT 0,
-	    lim_ip INTEGER DEFAULT 10,
+	    lim_ip INTEGER DEFAULT 0,
 	    ips TEXT DEFAULT '',
 	    uplink INTEGER DEFAULT 0,
 	    downlink INTEGER DEFAULT 0,
@@ -303,7 +303,7 @@ func backupDB(srcDB, memDB *sql.DB) error {
             created TEXT,
             sub_end TEXT DEFAULT '',
 			renew INTEGER DEFAULT 0,
-            lim_ip INTEGER DEFAULT 10,
+            lim_ip INTEGER DEFAULT 0,
             ips TEXT DEFAULT '',
             uplink INTEGER DEFAULT 0,
             downlink INTEGER DEFAULT 0,
@@ -447,7 +447,7 @@ func addUserToDB(memDB *sql.DB, clients []Client) error {
 
 	// Вывод email-адресов добавленных пользователей
 	if len(addedEmails) > 0 {
-		fmt.Printf("Пользователи успешно добавлены в базу данных: %s\n", strings.Join(addedEmails, ", "))
+		log.Printf("Users successfully added to database: %s\n", strings.Join(addedEmails, ", "))
 	}
 
 	return nil
@@ -504,7 +504,7 @@ func delUserFromDB(memDB *sql.DB, clients []Client) error {
 // getApiResponse получает статистику через API Xray
 func getApiResponse() (*ApiResponse, error) {
 	// Устанавливаем соединение с gRPC-сервером
-	conn, err := grpc.Dial("127.0.0.1:8080", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial("127.0.0.1:9953", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("ошибка подключения к gRPC-серверу: %w", err)
 	}
@@ -546,8 +546,8 @@ func getApiResponse() (*ApiResponse, error) {
 func extractProxyTraffic(apiData *ApiResponse) []string {
 	var result []string
 	for _, stat := range apiData.Stat {
-		// Пропускаем user, api и blocked
-		if strings.Contains(stat.Name, "user") || strings.Contains(stat.Name, "api") || strings.Contains(stat.Name, "blocked") {
+		// Пропускаем user, api и block
+		if strings.Contains(stat.Name, "user") || strings.Contains(stat.Name, "api") || strings.Contains(stat.Name, "block") {
 			continue
 		}
 
@@ -892,6 +892,10 @@ func logExcessIPs(memDB *sql.DB) error {
 		err := rows.Scan(&email, &ipLimit, &ipAddresses)
 		if err != nil {
 			return err
+		}
+
+		if ipLimit == 0 {
+			continue
 		}
 
 		// Убираем квадратные скобки и разбиваем IP-адреса по запятой
@@ -1625,21 +1629,27 @@ func updateIPLimitHandler(memDB *sql.DB) http.HandlerFunc {
 		ipLimit := r.FormValue("lim_ip")
 
 		// Проверяем, что параметры не пустые
-		if email == "" || ipLimit == "" {
-			http.Error(w, "Неверные параметры. Используйте email и lim_ip", http.StatusBadRequest)
+		if email == "" {
+			http.Error(w, "Неверные параметры. Используйте email", http.StatusBadRequest)
 			return
 		}
 
-		// Проверяем, что lim_ip - это число в пределах от 1 до 100
-		ipLimitInt, err := strconv.Atoi(ipLimit)
-		if err != nil {
-			http.Error(w, "lim_ip должен быть числом", http.StatusBadRequest)
-			return
-		}
+		// Устанавливаем lim_ip = 0, если параметр пустой или не передан
+		var ipLimitInt int
+		if ipLimit == "" {
+			ipLimitInt = 0
+		} else {
+			var err error
+			ipLimitInt, err = strconv.Atoi(ipLimit)
+			if err != nil {
+				http.Error(w, "lim_ip должен быть числом", http.StatusBadRequest)
+				return
+			}
 
-		if ipLimitInt < 1 || ipLimitInt > 100 {
-			http.Error(w, "lim_ip должен быть в пределах от 1 до 100", http.StatusBadRequest)
-			return
+			if ipLimitInt < 0 || ipLimitInt > 100 {
+				http.Error(w, "lim_ip должен быть в пределах от 1 до 100", http.StatusBadRequest)
+				return
+			}
 		}
 
 		dbMutex.Lock()
@@ -1690,6 +1700,42 @@ func deleteDNSStatsHandler(memDB *sql.DB) http.HandlerFunc {
 		log.Printf("Received request to delete dns_stats from %s", r.RemoteAddr)
 		w.WriteHeader(http.StatusOK)
 		fmt.Println(w, "dns_stats deleted successfully")
+	}
+}
+
+// resetTrafficStatsHandler сбрасывает uplink и downlink для всех источников в traffic_stats
+func resetTrafficStatsHandler(memDB *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Неверный метод. Используйте POST", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if memDB == nil {
+			http.Error(w, "База данных не инициализирована", http.StatusInternalServerError)
+			return
+		}
+
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
+		result, err := memDB.Exec("UPDATE traffic_stats SET uplink = 0, downlink = 0")
+		if err != nil {
+			log.Printf("Ошибка при сбросе трафика: %v", err)
+			http.Error(w, "Не удалось сбросить статистику трафика", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("Ошибка при получении количества затронутых строк: %v", err)
+			http.Error(w, "Ошибка обработки результата", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Received request to reset traffic_stats from %s, affected %d rows", r.RemoteAddr, rowsAffected)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "traffic_stats uplink and downlink reset successfully for %d sources\n", rowsAffected)
 	}
 }
 
@@ -2019,6 +2065,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	http.HandleFunc("/dns_stats", dnsStatsHandler(memDB))
 	http.HandleFunc("/update_lim_ip", updateIPLimitHandler(memDB))
 	http.HandleFunc("/delete_dns_stats", deleteDNSStatsHandler(memDB))
+	http.HandleFunc("/reset_traffic_stats", resetTrafficStatsHandler(memDB))
 	http.HandleFunc("/adjust-date", adjustDateOffsetHandler(memDB))
 	http.HandleFunc("/set-enabled", setEnabledHandler(memDB))
 	http.HandleFunc("/update_renew", updateRenewHandler(memDB))
@@ -2033,7 +2080,6 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 
 	// Ожидаем сигнала завершения
 	<-ctx.Done()
-	log.Println("Остановка API-сервера...")
 
 	// Создаем контекст с таймаутом для graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2043,7 +2089,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Ошибка при остановке сервера: %v", err)
 	}
-	log.Println("API-сервер успешно остановлен")
+	log.Println("API server stopped successfully")
 
 	// Уменьшаем счетчик WaitGroup только после полной остановки
 	wg.Done()
@@ -2272,7 +2318,7 @@ func main() {
 		}
 	}()
 
-	// Синхронизация данных каждые 5 минут
+	// Синхронизация данных каждые 10 минут
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2297,7 +2343,7 @@ func main() {
 				if err := syncToFileDB(memDB); err != nil {
 					log.Printf("Ошибка синхронизации: %v", err)
 				} else {
-					log.Println("База данных успешно синхронизирована.")
+					log.Println("Database synchronized successfully")
 				}
 			case <-ctx.Done():
 				return
@@ -2344,16 +2390,16 @@ func main() {
 
 	// Ожидание сигнала завершения
 	<-sigChan
-	log.Println("Получен сигнал завершения, сохраняем данные...")
+	log.Println("Received termination signal, saving data")
 	cancel() // Останавливаем все горутины
 
 	// Синхронизация данных перед завершением
 	if err := syncToFileDB(memDB); err != nil {
 		log.Printf("Ошибка синхронизации данных в fileDB: %v", err)
 	} else {
-		log.Println("Данные успешно сохранены в файл базы данных")
+		log.Println("Data successfully saved to database file")
 	}
 
 	wg.Wait()
-	log.Println("Программа завершена")
+	log.Println("Program completed")
 }
