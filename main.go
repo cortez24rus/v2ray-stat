@@ -250,10 +250,10 @@ func initDB(db *sql.DB) error {
 	);
     CREATE TABLE IF NOT EXISTS traffic_stats (
 		source TEXT PRIMARY KEY,
-		sess_uplink INTEGER DEFAULT 0,
-		sess_downlink INTEGER DEFAULT 0,
 		uplink INTEGER DEFAULT 0,
-		downlink INTEGER DEFAULT 0
+		downlink INTEGER DEFAULT 0,
+		sess_uplink INTEGER DEFAULT 0,
+		sess_downlink INTEGER DEFAULT 0
     );
 	CREATE TABLE IF NOT EXISTS dns_stats (
 		email TEXT NOT NULL,
@@ -1699,7 +1699,6 @@ func deleteDNSStatsHandler(memDB *sql.DB) http.HandlerFunc {
 
 		log.Printf("Received request to delete dns_stats from %s", r.RemoteAddr)
 		w.WriteHeader(http.StatusOK)
-		fmt.Println(w, "dns_stats deleted successfully")
 	}
 }
 
@@ -1735,7 +1734,41 @@ func resetTrafficStatsHandler(memDB *sql.DB) http.HandlerFunc {
 
 		log.Printf("Received request to reset traffic_stats from %s, affected %d rows", r.RemoteAddr, rowsAffected)
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "traffic_stats uplink and downlink reset successfully for %d sources\n", rowsAffected)
+	}
+}
+
+// resetClientsStatsHandler сбрасывает uplink и downlink для всех источников в clients_stats
+func resetClientsStatsHandler(memDB *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Неверный метод. Используйте POST", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if memDB == nil {
+			http.Error(w, "База данных не инициализирована", http.StatusInternalServerError)
+			return
+		}
+
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
+		result, err := memDB.Exec("UPDATE clients_stats SET uplink = 0, downlink = 0")
+		if err != nil {
+			log.Printf("Ошибка при сбросе трафика: %v", err)
+			http.Error(w, "Не удалось сбросить статистику трафика", http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			log.Printf("Ошибка при получении количества затронутых строк: %v", err)
+			http.Error(w, "Ошибка обработки результата", http.StatusInternalServerError)
+			return
+		}
+
+		log.Printf("Received request to reset clients_stats from %s, affected %d rows", r.RemoteAddr, rowsAffected)
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -2060,15 +2093,16 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	}
 
 	// Регистрируем маршруты
-	http.HandleFunc("/users", usersHandler(memDB))
-	http.HandleFunc("/stats", statsHandler(memDB))
-	http.HandleFunc("/dns_stats", dnsStatsHandler(memDB))
-	http.HandleFunc("/update_lim_ip", updateIPLimitHandler(memDB))
-	http.HandleFunc("/delete_dns_stats", deleteDNSStatsHandler(memDB))
-	http.HandleFunc("/reset_traffic_stats", resetTrafficStatsHandler(memDB))
-	http.HandleFunc("/adjust-date", adjustDateOffsetHandler(memDB))
-	http.HandleFunc("/set-enabled", setEnabledHandler(memDB))
-	http.HandleFunc("/update_renew", updateRenewHandler(memDB))
+	http.HandleFunc("/api/v1/users", usersHandler(memDB))
+	http.HandleFunc("/api/v1/stats", statsHandler(memDB))
+	http.HandleFunc("/api/v1/dns_stats", dnsStatsHandler(memDB))
+	http.HandleFunc("/api/v1/update_lim_ip", updateIPLimitHandler(memDB))
+	http.HandleFunc("/api/v1/delete_dns_stats", deleteDNSStatsHandler(memDB))
+	http.HandleFunc("/api/v1/reset_traffic_stats", resetTrafficStatsHandler(memDB))
+	http.HandleFunc("/api/v1/reset_clients_stats", resetClientsStatsHandler(memDB))
+	http.HandleFunc("/api/v1/adjust-date", adjustDateOffsetHandler(memDB))
+	http.HandleFunc("/api/v1/set-enabled", setEnabledHandler(memDB))
+	http.HandleFunc("/api/v1/update_renew", updateRenewHandler(memDB))
 
 	// Запускаем сервер в отдельной горутине
 	go func() {
