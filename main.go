@@ -390,7 +390,7 @@ func addUserToDB(memDB *sql.DB, clients []Client) error {
 		return fmt.Errorf("error starting transaction: %v", err)
 	}
 
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, status, enabled, created) VALUES (?, ?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, status, enabled, created) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("error preparing statement: %v", err)
