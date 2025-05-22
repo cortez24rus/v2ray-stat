@@ -26,7 +26,9 @@ type TrafficMonitor struct {
 	totalTxBytes    uint64
 	initialRxBytes  uint64
 	initialTxBytes  uint64
-	stopChan        chan struct{}
+	lastStats       NetworkStats
+	lastUpdate      time.Time
+	isFirstUpdate   bool
 }
 
 // NewTrafficMonitor creates a new TrafficMonitor and stores initial statistics
@@ -40,59 +42,41 @@ func NewTrafficMonitor(iface string) (*TrafficMonitor, error) {
 		Iface:          iface,
 		initialRxBytes: initialStats.RxBytes,
 		initialTxBytes: initialStats.TxBytes,
-		stopChan:       make(chan struct{}),
+		lastStats:      initialStats,
+		isFirstUpdate:  true,
 	}, nil
 }
 
-func (tm *TrafficMonitor) Start() {
-	var prevStats NetworkStats
-	var prevTime time.Time
-	firstRun := true
-
-	for {
-		select {
-		case <-tm.stopChan:
-			return
-		default:
-			stats, err := readNetworkStats(tm.Iface)
-			if err != nil {
-				time.Sleep(10 * time.Second)
-				continue
-			}
-
-			currentTime := time.Now()
-			if !firstRun {
-				deltaTime := currentTime.Sub(prevTime).Seconds()
-				if deltaTime > 0 {
-					rxBitsPerSec := float64((stats.RxBytes-prevStats.RxBytes)*8) / deltaTime
-					txBitsPerSec := float64((stats.TxBytes-prevStats.TxBytes)*8) / deltaTime
-					rxPacketsPerSec := float64(stats.RxPackets-prevStats.RxPackets) / deltaTime
-					txPacketsPerSec := float64(stats.TxPackets-prevStats.TxPackets) / deltaTime
-
-					tm.mu.Lock()
-					tm.rxSpeed = rxBitsPerSec
-					tm.txSpeed = txBitsPerSec
-					tm.rxPacketsPerSec = rxPacketsPerSec
-					tm.txPacketsPerSec = txPacketsPerSec
-
-					tm.totalRxBytes = stats.RxBytes - tm.initialRxBytes
-					tm.totalTxBytes = stats.TxBytes - tm.initialTxBytes
-					tm.mu.Unlock()
-				}
-			} else {
-				tm.mu.Lock()
-				tm.totalRxBytes = 0
-				tm.totalTxBytes = 0
-				tm.mu.Unlock()
-			}
-
-			prevStats = stats
-			prevTime = currentTime
-			firstRun = false
-
-			time.Sleep(10 * time.Second)
-		}
+// UpdateStats updates network traffic statistics for one iteration
+func (tm *TrafficMonitor) UpdateStats() error {
+	stats, err := readNetworkStats(tm.Iface)
+	if err != nil {
+		return fmt.Errorf("failed to update network stats: %v", err)
 	}
+
+	currentTime := time.Now()
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	if !tm.isFirstUpdate {
+		deltaTime := currentTime.Sub(tm.lastUpdate).Seconds()
+		if deltaTime > 0 {
+			tm.rxSpeed = float64((stats.RxBytes-tm.lastStats.RxBytes)*8) / deltaTime
+			tm.txSpeed = float64((stats.TxBytes-tm.lastStats.TxBytes)*8) / deltaTime
+			tm.rxPacketsPerSec = float64(stats.RxPackets-tm.lastStats.RxPackets) / deltaTime
+			tm.txPacketsPerSec = float64(stats.TxPackets-tm.lastStats.TxPackets) / deltaTime
+			tm.totalRxBytes = stats.RxBytes - tm.initialRxBytes
+			tm.totalTxBytes = stats.TxBytes - tm.initialTxBytes
+		}
+	} else {
+		tm.totalRxBytes = 0
+		tm.totalTxBytes = 0
+		tm.isFirstUpdate = false
+	}
+
+	tm.lastStats = stats
+	tm.lastUpdate = currentTime
+	return nil
 }
 
 // ResetTraffic resets accumulated traffic by updating initial values
@@ -112,10 +96,7 @@ func (tm *TrafficMonitor) ResetTraffic() error {
 	return nil
 }
 
-func (tm *TrafficMonitor) Stop() {
-	close(tm.stopChan)
-}
-
+// GetStats returns current network statistics
 func (tm *TrafficMonitor) GetStats() (rxSpeed, txSpeed, rxPacketsPerSec, txPacketsPerSec float64, totalRxBytes, totalTxBytes uint64) {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
