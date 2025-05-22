@@ -30,9 +30,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-var Version string
-var Hostname string
-
 type Config struct {
 	DatabasePath          string
 	XrayDir               string
@@ -65,6 +62,8 @@ var defaultConfig = Config{
 	MemoryThreshold:       0,
 }
 
+var Version string
+var Hostname string
 var config Config
 var (
 	dnsEnabled          = flag.Bool("dns", false, "Enable DNS statistics collection")
@@ -111,6 +110,12 @@ func getDefaultInterface() (string, error) {
 }
 
 func sendTelegramNotification(token, chatID, message string) error {
+	Hostname, err := os.Hostname()
+	if err != nil {
+		log.Printf("Error retrieving hostname: %v", err)
+		Hostname = "unknown"
+	}
+
 	escMsg := message
 	for _, ch := range []string{
 		"_", "*", "[", "]", "(", ")",
@@ -1401,9 +1406,9 @@ func statsHandler(memDB *sql.DB) http.HandlerFunc {
 			statsBuilder.WriteString("🖥️  Server State:\n")
 			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Uptime:", stats.GetUptime()))
 			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Load average:", stats.GetLoadAverage()))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Memory:", stats.GetMemoryUsage(config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification, config.MemoryThreshold, config.MemoryAverageInterval)))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Disk usage:", stats.GetDiskUsage(config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification, config.DiskThreshold, config.MemoryAverageInterval)))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Status:", stats.GetStatus(config.Services, config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification)))
+			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Memory:", stats.GetMemoryUsage()))
+			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Disk usage:", stats.GetDiskUsage()))
+			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Status:", stats.GetStatus(config.Services)))
 			statsBuilder.WriteString("\n")
 		}
 
@@ -2193,107 +2198,87 @@ func syncToFileDB(memDB *sql.DB) error {
 	return nil
 }
 
-func main() {
-	flag.Parse()
-
-	license.VerifyLicense()
-
-	log.Printf("Starting xCore application, version %s", Version)
-	if err := loadConfig(".env"); err != nil {
-		log.Fatalf("Error loading configuration: %v", err)
-	}
-
-	var err error
-	Hostname, err = os.Hostname()
-	if err != nil {
-		log.Printf("Error retrieving hostname: %v", err)
-		Hostname = "unknown"
-	}
-
-	if *NetworkEnabled {
-		iface, err := getDefaultInterface()
-		if err != nil {
-			log.Printf("Error determining default network interface: %v", err)
-		} else {
-			trafficMonitor, err = stats.NewTrafficMonitor(iface)
-			if err != nil {
-				log.Printf("Error initializing traffic monitor for interface %s: %v", iface, err)
-			} else {
-				go trafficMonitor.Start()
-				log.Printf("Traffic monitoring started for interface %s", iface)
-			}
-		}
-	}
-
+// Инициализация базы данных
+func initDatabase() (memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, err error) {
 	_, err = os.Stat(config.DatabasePath)
 	fileExists := !os.IsNotExist(err)
 
-	memDB, err := sql.Open("sqlite3", ":memory:")
+	memDB, err = sql.Open("sqlite3", ":memory:")
 	if err != nil {
-		log.Fatal("Error creating in-memory database:", err)
+		log.Printf("Error creating in-memory database: %v", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to create in-memory database: %v", err)
 	}
-	defer memDB.Close()
 
 	if fileExists {
 		fileDB, err := sql.Open("sqlite3", config.DatabasePath)
 		if err != nil {
-			log.Fatal("Error opening database:", err)
+			log.Printf("Error opening database: %v", err)
+			memDB.Close()
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to open database: %v", err)
 		}
 		defer fileDB.Close()
 
-		err = initDB(fileDB)
-		if err != nil {
-			log.Fatal("Error initializing database:", err)
+		if err = initDB(fileDB); err != nil {
+			log.Printf("Error initializing database: %v", err)
+			memDB.Close()
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize database: %v", err)
 		}
 
-		err = backupDB(fileDB, memDB)
-		if err != nil {
-			log.Fatal("Error copying data to memory:", err)
+		if err = backupDB(fileDB, memDB); err != nil {
+			log.Printf("Error copying data to memory: %v", err)
+			memDB.Close()
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to copy data to memory: %v", err)
 		}
 	} else {
-		err = initDB(memDB)
-		if err != nil {
-			log.Fatal("Error initializing in-memory database:", err)
+		if err = initDB(memDB); err != nil {
+			log.Printf("Error initializing in-memory database: %v", err)
+			memDB.Close()
+			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
 		}
 	}
 
-	accessLog, err := os.Open(config.XrayDir + "access.log")
+	accessLog, err = os.Open(config.XrayDir + "access.log")
 	if err != nil {
-		log.Fatalf("Error opening access.log: %v", err)
+		log.Printf("Error opening access.log: %v", err)
+		memDB.Close()
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to open access.log: %v", err)
 	}
-	defer accessLog.Close()
 
-	bannedLog, err := os.Open(config.BannedLogFile)
+	bannedLog, err = os.Open(config.BannedLogFile)
 	if err != nil {
-		log.Fatalf("Error opening ban log file: %v", err)
+		log.Printf("Error opening ban log file: %v", err)
+		memDB.Close()
+		accessLog.Close()
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to open ban log file: %v", err)
 	}
-	defer bannedLog.Close()
 
-	var offset int64
+	var accessOffset int64
 	accessLog.Seek(0, 2)
-	offset, err = accessLog.Seek(0, 1)
+	accessOffset, err = accessLog.Seek(0, 1)
 	if err != nil {
-		log.Fatalf("Error getting log file position: %v", err)
+		log.Printf("Error getting log file position: %v", err)
+		memDB.Close()
+		accessLog.Close()
+		bannedLog.Close()
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to get log file position: %v", err)
 	}
 
-	var bannedOffset int64
+	var banOffset int64
 	bannedLog.Seek(0, 2)
-	bannedOffset, err = bannedLog.Seek(0, 1)
+	banOffset, err = bannedLog.Seek(0, 1)
 	if err != nil {
-		log.Fatalf("Error getting ban log file position: %v", err)
+		log.Printf("Error getting ban log file position: %v", err)
+		memDB.Close()
+		accessLog.Close()
+		bannedLog.Close()
+		return nil, nil, nil, nil, nil, fmt.Errorf("failed to get ban log file position: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	return memDB, accessLog, bannedLog, &accessOffset, &banOffset, nil
+}
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go startAPIServer(ctx, memDB, &wg)
-
+// Запуск задачи логирования избыточных IP
+func monitorExcessIPs(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2302,8 +2287,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				err := logExcessIPs(memDB)
-				if err != nil {
+				if err := logExcessIPs(memDB); err != nil {
 					log.Printf("Error logging IPs: %v", err)
 				}
 			case <-ctx.Done():
@@ -2311,7 +2295,10 @@ func main() {
 			}
 		}
 	}()
+}
 
+// Запуск задачи синхронизации базы и проверки подписок
+func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2340,7 +2327,10 @@ func main() {
 			}
 		}
 	}()
+}
 
+// Запуск задачи мониторинга пользователей и логов
+func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -2364,22 +2354,135 @@ func main() {
 					updateProxyStats(memDB, apiData)
 					updateClientStats(memDB, apiData)
 				}
-				readNewLines(memDB, accessLog, &offset)
-				monitorBannedLog(bannedLog, &bannedOffset)
+				readNewLines(memDB, accessLog, offset)
+				monitorBannedLog(bannedLog, bannedOffset)
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+}
 
+// Инициализация мониторинга сети
+func initNetworkMonitoring() error {
+	if !*NetworkEnabled {
+		return nil
+	}
+
+	iface, err := getDefaultInterface()
+	if err != nil {
+		log.Printf("Error determining default network interface: %v", err)
+		return fmt.Errorf("failed to determine default network interface: %v", err)
+	}
+
+	trafficMonitor, err = stats.NewTrafficMonitor(iface)
+	if err != nil {
+		log.Printf("Error initializing traffic monitor for interface %s: %v", iface, err)
+		return fmt.Errorf("failed to initialize traffic monitor for interface %s: %v", iface, err)
+	}
+
+	log.Printf("Network monitoring initialized for interface %s", iface)
+	return nil
+}
+
+// Запуск мониторинга сети
+func monitorNetwork(ctx context.Context, wg *sync.WaitGroup) {
+	if !*NetworkEnabled || trafficMonitor == nil {
+		return
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := trafficMonitor.UpdateStats(); err != nil {
+					log.Printf("Error updating network stats for interface %s: %v", trafficMonitor.Iface, err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func monitorStats(ctx context.Context, wg *sync.WaitGroup) {
+	if !*StatsEnabled {
+		return
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if config.TelegramBotToken != "" && config.TelegramChatId != "" {
+					stats.CheckServiceStatus(config.Services, config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification)
+					stats.CheckDiskUsage(config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification, config.DiskThreshold, config.MemoryAverageInterval)
+					stats.CheckMemoryUsage(config.TelegramBotToken, config.TelegramChatId, sendTelegramNotification, config.MemoryThreshold, config.MemoryAverageInterval)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func main() {
+	flag.Parse()
+
+	license.VerifyLicense()
+
+	log.Printf("Starting xCore application, version %s", Version)
+
+	if err := loadConfig(".env"); err != nil {
+		log.Fatalf("Error loading configuration: %v", err)
+	}
+
+	// Инициализация базы данных и логов
+	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase()
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer memDB.Close()
+	defer accessLog.Close()
+	defer bannedLog.Close()
+
+	// Initialize network monitoring
+	if err := initNetworkMonitoring(); err != nil {
+		log.Printf("Failed to initialize network monitoring: %v", err)
+	}
+
+	// Setup context and signals
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	var wg sync.WaitGroup
+
+	// Start tasks
+	wg.Add(1)
+	go startAPIServer(ctx, memDB, &wg)
+	monitorExcessIPs(ctx, memDB, &wg)
+	monitorSubscriptionsAndSync(ctx, memDB, &wg)
+	monitorUsersAndLogs(ctx, memDB, accessLog, bannedLog, offset, bannedOffset, &wg)
+	monitorNetwork(ctx, &wg)
+	monitorStats(ctx, &wg)
+
+	// Wait for termination signal
 	<-sigChan
 	log.Println("Received termination signal, saving data")
 	cancel()
 
-	if *NetworkEnabled && trafficMonitor != nil {
-		trafficMonitor.Stop()
-	}
-
+	// Synchronize database
 	if err := syncToFileDB(memDB); err != nil {
 		log.Printf("Error synchronizing data to fileDB: %v", err)
 	} else {
