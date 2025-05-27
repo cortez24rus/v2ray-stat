@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"xcore/telegram"
 )
 
 var (
@@ -22,6 +24,77 @@ var (
 	diskPercentages   []float64
 	memoryPercentages []float64
 )
+
+// isServiceRunning возвращает true, если процесс с именем svc найден в /proc
+func isServiceRunning(svc string) bool {
+	procDir, err := os.Open("/proc")
+	if err != nil {
+		log.Printf("Ошибка открытия /proc для службы %s: %v", svc, err)
+		return false
+	}
+	defer procDir.Close()
+
+	entries, err := procDir.Readdirnames(-1)
+	if err != nil {
+		log.Printf("Ошибка чтения /proc для службы %s: %v", svc, err)
+		return false
+	}
+
+	for _, entry := range entries {
+		if _, err := strconv.Atoi(entry); err != nil {
+			continue
+		}
+		commPath := filepath.Join("/proc", entry, "comm")
+		commData, err := os.ReadFile(commPath)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(commData)) == svc {
+			// log.Printf("Служба %s найдена в /proc/%s/comm", svc, entry)
+			return true
+		}
+	}
+	// log.Printf("Служба %s не найдена в /proc", svc)
+	return false
+}
+
+// CheckServiceStatus проверяет статусы сервисов и шлёт уведомление, если что-то изменилось
+func CheckServiceStatus(services []string, token, chatID string) {
+	statusMutex.Lock()
+	defer statusMutex.Unlock()
+
+	var changed []string
+	var statusLines []string
+
+	for _, svc := range services {
+		running := isServiceRunning(svc)
+		prev, seen := serviceStatuses[svc]
+
+		if !isFirstCheck && seen && prev != running {
+			changed = append(changed, svc)
+		}
+
+		serviceStatuses[svc] = running
+		state := "▼"
+		if running {
+			state = "▲"
+		}
+		statusLines = append(statusLines, fmt.Sprintf("%s %s", state, svc))
+	}
+
+	if !isFirstCheck && len(changed) > 0 {
+		msg := fmt.Sprintf("⚠️ Service Status Update:\n%s", strings.Join(statusLines, "\n"))
+		if err := telegram.SendNotification(token, chatID, msg); err != nil {
+			log.Printf("Error sending service status notification: %v", err)
+		} else {
+			log.Println("Service status notification sent successfully")
+		}
+	}
+
+	if isFirstCheck {
+		isFirstCheck = false
+	}
+}
 
 // GetUptime returns the system uptime
 func GetUptime() string {
@@ -81,7 +154,7 @@ func GetMemoryUsage() string {
 }
 
 // CheckMemoryUsage checks memory usage and sends notifications if thresholds are exceeded
-func CheckMemoryUsage(token string, chatID string, sendNotification func(string, string, string) error, threshold int, interval int) {
+func CheckMemoryUsage(token string, chatID string, threshold int, interval int) {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		log.Printf("Error reading /proc/meminfo: %v", err)
@@ -132,16 +205,16 @@ func CheckMemoryUsage(token string, chatID string, sendNotification func(string,
 		average := sum / float64(len(memoryPercentages))
 
 		if average > float64(threshold) && !memoryExceeded {
-			message := fmt.Sprintf("🚨 ALERT: Average memory usage over %d seconds exceeded %d%%! (Current: %.2f%%)", interval, threshold, average)
-			if err := sendNotification(token, chatID, message); err != nil {
+			message := fmt.Sprintf("🚨 ALERT: Average memory usage over *%d* seconds exceeded *%d%%*! (Current: *%.2f%%*)", interval, threshold, average)
+			if err := telegram.SendNotification(token, chatID, message); err != nil {
 				log.Printf("Error sending memory usage notification to Telegram: %v", err)
 			} else {
 				log.Println("Memory usage notification sent successfully to Telegram")
 			}
 			memoryExceeded = true
 		} else if average <= float64(threshold) && memoryExceeded {
-			message := fmt.Sprintf("✅ Average memory usage over %d seconds dropped below %d%%. (Current: %.2f%%)", interval, threshold, average)
-			if err := sendNotification(token, chatID, message); err != nil {
+			message := fmt.Sprintf("✅ Average memory usage over *%d* seconds dropped below *%d%%*. (Current: *%.2f%%*)", interval, threshold, average)
+			if err := telegram.SendNotification(token, chatID, message); err != nil {
 				log.Printf("Error sending memory usage notification to Telegram: %v", err)
 			} else {
 				log.Println("Memory usage notification sent successfully to Telegram")
@@ -171,7 +244,7 @@ func GetDiskUsage() string {
 }
 
 // CheckDiskUsage checks disk usage and sends notifications if thresholds are exceeded
-func CheckDiskUsage(token string, chatID string, sendNotification func(string, string, string) error, threshold int, interval int) {
+func CheckDiskUsage(token string, chatID string, threshold int, interval int) {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs("/", &stat); err != nil {
 		log.Printf("Error getting disk usage: %v", err)
@@ -210,16 +283,16 @@ func CheckDiskUsage(token string, chatID string, sendNotification func(string, s
 		average := sum / float64(len(diskPercentages))
 
 		if average > float64(threshold) && !diskExceeded {
-			message := fmt.Sprintf("🚨 ALERT: Average disk usage over %d seconds exceeded %d%%! (Current: %.2f%%)", interval, threshold, average)
-			if err := sendNotification(token, chatID, message); err != nil {
+			message := fmt.Sprintf("🚨 ALERT: Average disk usage over *%d* seconds exceeded *%d%%*! (Current: *%.2f%%*)", interval, threshold, average)
+			if err := telegram.SendNotification(token, chatID, message); err != nil {
 				log.Printf("Error sending disk usage notification to Telegram: %v", err)
 			} else {
 				log.Println("Disk usage notification sent successfully to Telegram")
 			}
 			diskExceeded = true
 		} else if average <= float64(threshold) && diskExceeded {
-			message := fmt.Sprintf("✅ Average disk usage over %d seconds dropped below %d%%. (Current: %.2f%%)", interval, threshold, average)
-			if err := sendNotification(token, chatID, message); err != nil {
+			message := fmt.Sprintf("✅ Average disk usage over *%d* seconds dropped below *%d%%*. (Current: *%.2f%%*)", interval, threshold, average)
+			if err := telegram.SendNotification(token, chatID, message); err != nil {
 				log.Printf("Error sending disk usage notification to Telegram: %v", err)
 			} else {
 				log.Println("Disk usage notification sent successfully to Telegram")
@@ -273,69 +346,4 @@ func GetStatus(services []string) string {
 	}
 
 	return strings.TrimSpace(status.String())
-}
-
-// CheckServiceStatus checks service statuses and sends notifications on changes
-func CheckServiceStatus(services []string, token, chatID string, sendNotification func(string, string, string) error) {
-	var changedServices []string
-	var statusMessages []string
-
-	statusMutex.Lock()
-	defer statusMutex.Unlock()
-
-	for _, svc := range services {
-		isRunning := false
-		procDir, err := os.Open("/proc")
-		if err != nil {
-			log.Printf("Error opening /proc: %v", err)
-			continue
-		}
-		defer procDir.Close()
-		entries, err := procDir.Readdirnames(-1)
-		if err != nil {
-			log.Printf("Error reading /proc: %v", err)
-			continue
-		}
-		for _, entry := range entries {
-			if _, err := strconv.Atoi(entry); err == nil {
-				commPath := filepath.Join("/proc", entry, "comm")
-				commData, err := os.ReadFile(commPath)
-				if err == nil {
-					comm := strings.TrimSpace(string(commData))
-					if comm == svc {
-						isRunning = true
-						break
-					}
-				}
-			}
-		}
-
-		if !isFirstCheck {
-			previousStatus, exists := serviceStatuses[svc]
-			if exists && previousStatus != isRunning {
-				changedServices = append(changedServices, svc)
-			}
-		}
-
-		serviceStatuses[svc] = isRunning
-
-		state := "▼"
-		if isRunning {
-			state = "▲"
-		}
-		statusMessages = append(statusMessages, fmt.Sprintf("%s %s", state, svc))
-	}
-
-	if !isFirstCheck && len(changedServices) > 0 {
-		message := fmt.Sprintf("⚠️ Service Status Update:\n%s", strings.Join(statusMessages, "\n"))
-		if err := sendNotification(token, chatID, message); err != nil {
-			log.Printf("Error sending service status notification to Telegram: %v", err)
-		} else {
-			log.Println("Service status notification sent successfully to Telegram")
-		}
-	}
-
-	if isFirstCheck {
-		isFirstCheck = false
-	}
 }
