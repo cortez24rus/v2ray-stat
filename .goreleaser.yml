@@ -10,15 +10,26 @@ checksum:
   name_template: "checksums.txt"
 
 builds:
-  - id: build
+  - id: amd64
     binary: xcore
-    env:
-      - CGO_ENABLED=1
     goos:
       - linux
     goarch:
       - amd64
+    env:
+      - CGO_ENABLED=1
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Tag }}
+
+  - id: arm64
+    binary: xcore
+    goos:
+      - linux
+    goarch:
       - arm64
+    env:
+      - CGO_ENABLED=0
     ldflags:
       - -s -w
       - -X main.Version={{ .Tag }}
