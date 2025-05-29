@@ -63,7 +63,7 @@ github.com/xtls/xray-core/transport/internet
 github.com/xtls/xray-core/transport/internet/stat
 github.com/xtls/xray-core/transport/internet/udp
 github.com/xtls/xray-core/transport/pipe
-# golang.org/x/net v0.37.0
+# golang.org/x/net v0.38.0
 ## explicit; go 1.23.0
 golang.org/x/net/http/httpguts
 golang.org/x/net/http2
