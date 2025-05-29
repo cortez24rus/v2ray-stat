@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	version             string
+	Version             string
 	dnsEnabled          = flag.Bool("dns", false, "Enable DNS statistics collection")
 	statsEnabled        = flag.Bool("stats", false, "Enable general server statistics output")
 	networkEnabled      = flag.Bool("net", false, "Enable network interface statistics collection")
