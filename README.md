@@ -1,1 +1,1 @@
-# XCore-go
+### v2ray-stat
