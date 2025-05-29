@@ -12,9 +12,10 @@ import (
 
 // Config holds the configuration settings for the application.
 type Config struct {
-	ProxyType             string
+	CoreType              string
+	CoreDir               string
+	AccessLogPath         string
 	DatabasePath          string
-	ProxyDir              string
 	LuaFilePath           string
 	XipLogFile            string
 	BannedLogFile         string
@@ -30,9 +31,10 @@ type Config struct {
 
 // defaultConfig provides default configuration values.
 var defaultConfig = Config{
-	ProxyType:             "xray",
+	CoreType:              "xray",
+	CoreDir:               "/usr/local/etc/xray/",
+	AccessLogPath:         "/usr/local/etc/xray/access.log",
 	DatabasePath:          "/usr/local/xcore/data.db",
-	ProxyDir:              "/usr/local/etc/xray/",
 	LuaFilePath:           "/etc/haproxy/.auth.lua",
 	XipLogFile:            "/var/log/xcore.log",
 	BannedLogFile:         "/var/log/xcore-banned.log",
@@ -81,11 +83,19 @@ func LoadConfig(configFile string) (Config, error) {
 		return cfg, fmt.Errorf("error reading configuration file: %v", err)
 	}
 
+	if val, ok := configMap["CORE_TYPE"]; ok {
+		if val == "xray" || val == "singbox" {
+			cfg.CoreType = val
+		}
+	}
+	if val, ok := configMap["CORE_DIR"]; ok && val != "" {
+		cfg.CoreDir = val
+	}
+	if val, ok := configMap["ACCESS_LOG_PATH"]; ok && val != "" {
+		cfg.AccessLogPath = val
+	}
 	if val, ok := configMap["DATABASE_PATH"]; ok && val != "" {
 		cfg.DatabasePath = val
-	}
-	if val, ok := configMap["PROXY_DIR"]; ok && val != "" {
-		cfg.ProxyDir = val
 	}
 	if val, ok := configMap["LUA_FILE_PATH"]; ok && val != "" {
 		cfg.LuaFilePath = val
@@ -137,11 +147,6 @@ func LoadConfig(configFile string) (Config, error) {
 			log.Printf("Invalid DISK_THRESHOLD value '%s', using default %d%%", val, cfg.DiskThreshold)
 		} else {
 			cfg.DiskThreshold = dthreshold
-		}
-	}
-	if val, ok := configMap["PROXY_TYPE"]; ok {
-		if val == "xray" || val == "singbox" {
-			cfg.ProxyType = val
 		}
 	}
 

@@ -672,7 +672,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 			log.Printf("Параметр inbound не указан, используется значение по умолчанию: %s", inboundTag)
 		}
 
-		configPath := cfg.ProxyDir + "config.json"
+		configPath := cfg.CoreDir + "config.json"
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			log.Printf("Error reading config.json: %v", err)
@@ -680,7 +680,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 			return
 		}
 
-		proxyType := cfg.ProxyType
+		proxyType := cfg.CoreType
 		var configData interface{}
 
 		switch proxyType {
@@ -774,7 +774,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			log.Printf("Параметр inbound не указан, используется значение по умолчанию: %s", inboundTag)
 		}
 
-		configPath := cfg.ProxyDir + "config.json"
+		configPath := cfg.CoreDir + "config.json"
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			log.Printf("Ошибка чтения config.json: %v", err)
@@ -782,7 +782,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			return
 		}
 
-		proxyType := cfg.ProxyType
+		proxyType := cfg.CoreType
 		var configData interface{}
 
 		switch proxyType {

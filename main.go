@@ -26,6 +26,7 @@ import (
 	"xcore/telegram"
 
 	_ "github.com/mattn/go-sqlite3"
+	statsSingbox "github.com/v2ray/v2ray-core/app/stats/command"
 	statsXray "github.com/xtls/xray-core/app/stats/command"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -74,15 +75,6 @@ func getDefaultInterface() (string, error) {
 	}
 
 	return "", fmt.Errorf("second active interface not found")
-}
-
-type Stat struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
-}
-
-type ApiResponse struct {
-	Stat []Stat `json:"stat"`
 }
 
 func extractData() string {
@@ -223,7 +215,7 @@ func backupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
 }
 
 func extractUsersXrayServer(cfg *config.Config) []config.Client {
-	configPath := cfg.ProxyDir + "config.json"
+	configPath := cfg.CoreDir + "config.json"
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		log.Printf("Error reading config.json: %v", err)
@@ -240,6 +232,41 @@ func extractUsersXrayServer(cfg *config.Config) []config.Client {
 	for _, inbound := range cfgXray.Inbounds {
 		if inbound.Tag == "vless-in" {
 			clients = append(clients, inbound.Settings.Clients...)
+		}
+	}
+
+	return clients
+}
+
+func extractUsersSingboxServer(cfg *config.Config) []config.Client {
+	configPath := cfg.CoreDir + "config.json"
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		log.Printf("Ошибка чтения config.json для Singbox: %v", err)
+		return nil
+	}
+
+	var cfgSingbox config.ConfigSingBox
+	if err := json.Unmarshal(data, &cfgSingbox); err != nil {
+		log.Printf("Ошибка парсинга JSON для Singbox: %v", err)
+		return nil
+	}
+
+	var clients []config.Client
+	for _, inbound := range cfgSingbox.Inbounds {
+		if inbound.Tag == "vless-in" || inbound.Tag == "trojan-in" {
+			for _, user := range inbound.Users {
+				client := config.Client{
+					Email: user.Name,
+				}
+				if inbound.Type == "vless" {
+					client.ID = user.UUID
+				} else if inbound.Type == "trojan" {
+					client.Password = user.Password
+					client.ID = user.Password // Используем Password как ID для Trojan
+				}
+				clients = append(clients, client)
+			}
 		}
 	}
 
@@ -269,7 +296,20 @@ func getFileCreationTime(email string) (string, error) {
 	return formattedTime, nil
 }
 
-func addUserToDB(memDB *sql.DB, clients []config.Client) error {
+func addUserToDB(memDB *sql.DB, cfg *config.Config) error {
+	var clients []config.Client
+	switch cfg.CoreType {
+	case "xray":
+		clients = extractUsersXrayServer(cfg)
+	case "singbox":
+		clients = extractUsersSingboxServer(cfg)
+	}
+
+	if len(clients) == 0 {
+		log.Printf("Не найдено пользователей для добавления в БД для типа %s", cfg.CoreType)
+		return nil
+	}
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -320,7 +360,15 @@ func addUserToDB(memDB *sql.DB, clients []config.Client) error {
 	return nil
 }
 
-func delUserFromDB(memDB *sql.DB, clients []config.Client) error {
+func delUserFromDB(memDB *sql.DB, cfg *config.Config) error {
+	var clients []config.Client
+	switch cfg.CoreType {
+	case "xray":
+		clients = extractUsersXrayServer(cfg)
+	case "singbox":
+		clients = extractUsersSingboxServer(cfg)
+	}
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -366,42 +414,57 @@ func delUserFromDB(memDB *sql.DB, clients []config.Client) error {
 	return nil
 }
 
-func getApiResponse() (*ApiResponse, error) {
+func getApiResponse(cfg *config.Config) (*api.ApiResponse, error) {
 	clientConn, err := grpc.NewClient("127.0.0.1:9953", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to gRPC server: %w", err)
 	}
 	defer clientConn.Close()
 
-	client := statsXray.NewStatsServiceClient(clientConn)
-
-	req := &statsXray.QueryStatsRequest{
-		Pattern: "",
-		Reset_:  false,
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	resp, err := client.QueryStats(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("error executing gRPC request: %w", err)
-	}
+	var stats []api.Stat
 
-	apiResponse := &ApiResponse{
-		Stat: make([]Stat, len(resp.GetStat())),
-	}
-	for i, stat := range resp.GetStat() {
-		apiResponse.Stat[i] = Stat{
-			Name:  stat.GetName(),
-			Value: strconv.FormatInt(stat.GetValue(), 10),
+	switch cfg.CoreType {
+	case "xray":
+		client := statsXray.NewStatsServiceClient(clientConn)
+		req := &statsXray.QueryStatsRequest{
+			Pattern: "",
+		}
+		xrayResp, err := client.QueryStats(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка выполнения gRPC-запроса Xray: %w", err)
+		}
+
+		for _, s := range xrayResp.GetStat() {
+			stats = append(stats, api.Stat{
+				Name:  s.GetName(),
+				Value: strconv.FormatInt(s.GetValue(), 10),
+			})
+		}
+
+	case "singbox":
+		client := statsSingbox.NewStatsServiceClient(clientConn)
+		req := &statsSingbox.QueryStatsRequest{
+			Pattern: "",
+		}
+		singboxResp, err := client.QueryStats(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("ошибка выполнения gRPC-запроса Singbox: %w", err)
+		}
+		for _, s := range singboxResp.GetStat() {
+			stats = append(stats, api.Stat{
+				Name:  s.GetName(),
+				Value: strconv.FormatInt(s.GetValue(), 10),
+			})
 		}
 	}
 
-	return apiResponse, nil
+	return &api.ApiResponse{Stat: stats}, nil
 }
 
-func extractProxyTraffic(apiData *ApiResponse) []string {
+func extractProxyTraffic(apiData *api.ApiResponse) []string {
 	var result []string
 	for _, stat := range apiData.Stat {
 		if strings.Contains(stat.Name, "user") || strings.Contains(stat.Name, "api") || strings.Contains(stat.Name, "block") {
@@ -416,7 +479,7 @@ func extractProxyTraffic(apiData *ApiResponse) []string {
 	return result
 }
 
-func extractUserTraffic(apiData *ApiResponse) []string {
+func extractUserTraffic(apiData *api.ApiResponse) []string {
 	var result []string
 	for _, stat := range apiData.Stat {
 		if strings.Contains(stat.Name, "user") {
@@ -437,7 +500,7 @@ func splitAndCleanName(name string) []string {
 	return nil
 }
 
-func updateProxyStats(memDB *sql.DB, apiData *ApiResponse) {
+func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -519,7 +582,7 @@ func updateProxyStats(memDB *sql.DB, apiData *ApiResponse) {
 	previousStats = strings.Join(currentStats, "\n")
 }
 
-func updateClientStats(memDB *sql.DB, apiData *ApiResponse) {
+func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -1438,7 +1501,7 @@ func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.F
 		}
 	}
 
-	accessLog, err = os.Open(cfg.ProxyDir + "access.log")
+	accessLog, err = os.Open(cfg.AccessLogPath)
 	if err != nil {
 		log.Printf("Error opening access.log: %v", err)
 		memDB.Close()
@@ -1540,15 +1603,14 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLo
 		for {
 			select {
 			case <-ticker.C:
-				clients := extractUsersXrayServer(cfg)
-				if err := addUserToDB(memDB, clients); err != nil {
-					log.Printf("Error adding user: %v", err)
+				if err := addUserToDB(memDB, cfg); err != nil {
+					log.Printf("Ошибка добавления пользователей: %v", err)
 				}
-				if err := delUserFromDB(memDB, clients); err != nil {
-					log.Printf("Error deleting users: %v", err)
+				if err := delUserFromDB(memDB, cfg); err != nil {
+					log.Printf("Ошибка удаления пользователей: %v", err)
 				}
 
-				apiData, err := getApiResponse()
+				apiData, err := getApiResponse(cfg)
 				if err != nil {
 					log.Printf("Error retrieving API data: %v", err)
 				} else {
@@ -1644,7 +1706,7 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	log.Printf("Starting xCore application, with core: %s, version %s", cfg.ProxyType, version)
+	log.Printf("Starting xCore application, with core: %s, version %s", cfg.CoreType, version)
 
 	// Инициализация базы данных и логов
 	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase(&cfg)
