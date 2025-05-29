@@ -1706,7 +1706,7 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	log.Printf("Starting xCore application, with core: %s, version %s", cfg.CoreType, version)
+	log.Printf("Starting xCore application, with core: %s, version %s", cfg.CoreType, Version)
 
 	// Инициализация базы данных и логов
 	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase(&cfg)
