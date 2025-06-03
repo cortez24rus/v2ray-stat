@@ -45,9 +45,6 @@ jobs:
             -ldflags="-X main.Version=${COMMID} -s -w -buildid=" \
             -v .
 
-      - name: List files in workspace
-        run: ls -la ${GITHUB_WORKSPACE}
-
       - name: Copy additional files
         run: |
           cp ${GITHUB_WORKSPACE}/.env       ./build_assets/.env
@@ -66,7 +63,12 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./build_assets/**
+          file: |
+            ./build_assets/.env
+            ./build_assets/README.md
+            ./build_assets/LICENSE
+            ./build_assets/v2ray-stat_${{ matrix.goos }}_${{ matrix.goarch }}
+            ./build_assets/checksums.txt
           tag: ${{ github.ref }}
           file_glob: true
           overwrite: true
