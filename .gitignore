@@ -1,0 +1,5 @@
+vendor/
+*.log
+*.tmp
+
+!.env
