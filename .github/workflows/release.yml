@@ -70,5 +70,5 @@ jobs:
             ./build_assets/v2ray-stat_${{ matrix.goos }}_${{ matrix.goarch }}
             ./build_assets/checksums.txt
           tag: ${{ github.ref }}
-          file_glob: true
+          file_glob: false
           overwrite: true
