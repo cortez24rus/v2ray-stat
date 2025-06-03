@@ -8,6 +8,7 @@ jobs:
   build:
     permissions:
       contents: write
+
     strategy:
       matrix:
         goos: [linux]
@@ -19,6 +20,7 @@ jobs:
       GOOS: ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
       CGO_ENABLED: 0
+
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v4
@@ -38,20 +40,23 @@ jobs:
           COMMID=$(git describe --always --dirty)
           BINARY_NAME="v2ray-stat_${GOOS}_${GOARCH}"
           echo "Building $BINARY_NAME..."
-          go build -o build_assets/$BINARY_NAME -trimpath -buildvcs=false -ldflags="-X main.Version=${COMMID} -s -w -buildid=" -v .
+          go build -o build_assets/$BINARY_NAME \
+            -trimpath -buildvcs=false \
+            -ldflags="-X main.Version=${COMMID} -s -w -buildid=" \
+            -v .
 
       - name: Copy additional files
         run: |
-          cp ${GITHUB_WORKSPACE}/README.md ./build_assets/README.md
-          cp ${GITHUB_WORKSPACE}/LICENSE ./build_assets/LICENSE
+          cp "${GITHUB_WORKSPACE}/README.md"  build_assets/README.md
+          cp "${GITHUB_WORKSPACE}/LICENSE"     build_assets/LICENSE
 
       - name: Create checksums
         run: |
           cd build_assets
           sha256sum * > checksums.txt
 
-      - name: Upload binaries to release
-        uses: actions/upload-release-action@v3
+      - name: Upload assets to GitHub Release
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: ./build_assets/*
