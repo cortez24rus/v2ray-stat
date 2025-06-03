@@ -48,7 +48,8 @@ jobs:
       - name: Copy additional files
         run: |
           cp "${GITHUB_WORKSPACE}/README.md"  build_assets/README.md
-          cp "${GITHUB_WORKSPACE}/LICENSE"     build_assets/LICENSE
+          cp "${GITHUB_WORKSPACE}/LICENSE"    build_assets/LICENSE
+          cp "${GITHUB_WORKSPACE}/.env"       build_assets/.env
 
       - name: Create checksums
         run: |
