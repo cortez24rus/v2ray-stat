@@ -11,7 +11,7 @@ checksum:
 
 builds:
   - id: amd64
-    binary: xcore
+    binary: v2ray-stat
     goos:
       - linux
     goarch:
@@ -23,7 +23,7 @@ builds:
       - -X main.Version={{ .Tag }}
 
   - id: arm64
-    binary: xcore
+    binary: v2ray-stat
     goos:
       - linux
     goarch:
@@ -34,20 +34,10 @@ builds:
       - -s -w
       - -X main.Version={{ .Tag }}
 
-archives:
-  - id: XCore-go
-    formats:
-      - tar.gz
-    name_template: "{{ .ProjectName }}-v{{ .Version }}-{{ .Os }}-{{ .Arch }}"
-    files:
-      - .env
-      - LICENSE
-
 release:
   github:
     owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
     name: "{{ .Env.GITHUB_REPOSITORY_NAME }}"
-  name_template: "v{{ .Version }}"
 
 changelog:
   sort: asc
