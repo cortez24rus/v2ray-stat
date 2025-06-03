@@ -48,14 +48,14 @@ jobs:
       - name: List files in workspace
         run: ls -la ${GITHUB_WORKSPACE}
 
-      - name: List build_assets contents
-        run: ls -la build_assets
-
       - name: Copy additional files
         run: |
           cp "${GITHUB_WORKSPACE}/README.md"  build_assets/README.md
           cp "${GITHUB_WORKSPACE}/LICENSE"    build_assets/LICENSE
           cp "${GITHUB_WORKSPACE}/.env"        build_assets/.env
+
+      - name: List build_assets contents
+        run: ls -la build_assets
 
       - name: Create checksums
         run: |
