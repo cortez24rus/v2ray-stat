@@ -11,7 +11,7 @@ checksum:
 
 builds:
   - id: amd64
-    binary: v2ray-stat
+    binary: v2ray-stat_linux_amd64
     goos:
       - linux
     goarch:
@@ -24,7 +24,7 @@ builds:
       - -X main.Version={{ .Tag }}
 
   - id: arm64
-    binary: v2ray-stat
+    binary: v2ray-stat_linux_arm64
     goos:
       - linux
     goarch:
@@ -40,6 +40,7 @@ release:
   github:
     owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
     name: "{{ .Env.GITHUB_REPOSITORY_NAME }}"
+  disable: false
 
 changelog:
   sort: asc
