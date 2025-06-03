@@ -16,7 +16,6 @@ type Config struct {
 	CoreDir               string
 	AccessLogPath         string
 	DatabasePath          string
-	LuaFilePath           string
 	XipLogFile            string
 	BannedLogFile         string
 	IpTtl                 time.Duration
@@ -34,10 +33,9 @@ var defaultConfig = Config{
 	CoreType:              "xray",
 	CoreDir:               "/usr/local/etc/xray/",
 	AccessLogPath:         "/usr/local/etc/xray/access.log",
-	DatabasePath:          "/usr/local/xcore/data.db",
-	LuaFilePath:           "/etc/haproxy/.auth.lua",
-	XipLogFile:            "/var/log/xcore.log",
-	BannedLogFile:         "/var/log/xcore-banned.log",
+	DatabasePath:          "/usr/local/v2ray-stat/data.db",
+	XipLogFile:            "/var/log/v2ray-stat.log",
+	BannedLogFile:         "/var/log/v2ray-stat-banned.log",
 	Port:                  "9952",
 	IpTtl:                 66 * time.Second,
 	TelegramBotToken:      "",
@@ -96,9 +94,6 @@ func LoadConfig(configFile string) (Config, error) {
 	}
 	if val, ok := configMap["DATABASE_PATH"]; ok && val != "" {
 		cfg.DatabasePath = val
-	}
-	if val, ok := configMap["LUA_FILE_PATH"]; ok && val != "" {
-		cfg.LuaFilePath = val
 	}
 	if val, ok := configMap["XIP_LOG_FILE"]; ok && val != "" {
 		cfg.XipLogFile = val

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"xcore/telegram"
+	"v2ray-stat/telegram"
 )
 
 var (

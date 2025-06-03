@@ -1,26 +1,30 @@
 package config
 
-type Client struct {
+type DisabledUsersConfig struct {
+	Inbounds []XrayInbound `json:"inbounds"`
+}
+
+type XrayClient struct {
 	Email    string `json:"email"`
 	ID       string `json:"id,omitempty"`
 	Password string `json:"password,omitempty"`
 }
 
-type InboundSettings struct {
-	Clients    []Client `json:"clients"`
-	Decryption *string  `json:"decryption,omitempty"`
-	Address    *string  `json:"address,omitempty"`
+type XraySettings struct {
+	Clients    []XrayClient `json:"clients"`
+	Decryption *string      `json:"decryption,omitempty"`
+	Address    *string      `json:"address,omitempty"`
 }
 
 type XrayInbound struct {
-	Tag            string          `json:"tag"`
-	Settings       InboundSettings `json:"settings"`
-	Port           int             `json:"port"`
-	Protocol       string          `json:"protocol"`
-	Listen         string          `json:"listen"`
-	StreamSettings map[string]any  `json:"streamSettings,omitempty"`
-	Sniffing       map[string]any  `json:"sniffing,omitempty"`
-	Allocate       map[string]any  `json:"allocate,omitempty"`
+	Tag            string         `json:"tag"`
+	Settings       XraySettings   `json:"settings"`
+	Port           int            `json:"port"`
+	Protocol       string         `json:"protocol"`
+	Listen         string         `json:"listen"`
+	StreamSettings map[string]any `json:"streamSettings,omitempty"`
+	Sniffing       map[string]any `json:"sniffing,omitempty"`
+	Allocate       map[string]any `json:"allocate,omitempty"`
 }
 
 type ConfigXray struct {
@@ -40,26 +44,26 @@ type ConfigXray struct {
 	BurstObservatory map[string]any   `json:"burstObservatory,omitempty"`
 }
 
-type SingBoxUser struct {
+type SingboxClient struct {
 	Name     string `json:"name"`
 	UUID     string `json:"uuid,omitempty"`
 	Password string `json:"password,omitempty"`
 }
 
-type SingBoxInbound struct {
-	Type       string         `json:"type"`
-	Tag        string         `json:"tag"`
-	Listen     string         `json:"listen"`
-	ListenPort int            `json:"listen_port"`
-	Users      []SingBoxUser  `json:"users"`
-	Transport  map[string]any `json:"transport,omitempty"`
-	Multiplex  map[string]any `json:"multiplex,omitempty"`
+type SingboxInbound struct {
+	Type       string          `json:"type"`
+	Tag        string          `json:"tag"`
+	Listen     string          `json:"listen"`
+	ListenPort int             `json:"listen_port"`
+	Users      []SingboxClient `json:"users"`
+	Transport  map[string]any  `json:"transport,omitempty"`
+	Multiplex  map[string]any  `json:"multiplex,omitempty"`
 }
 
-type ConfigSingBox struct {
+type ConfigSingbox struct {
 	Log          map[string]any   `json:"log"`
 	Dns          map[string]any   `json:"dns"`
-	Inbounds     []SingBoxInbound `json:"inbounds"`
+	Inbounds     []SingboxInbound `json:"inbounds"`
 	Outbounds    []map[string]any `json:"outbounds"`
 	Route        map[string]any   `json:"route"`
 	Experimental map[string]any   `json:"experimental,omitempty"`

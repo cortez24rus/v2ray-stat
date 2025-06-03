@@ -7,12 +7,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
-	"xcore/config"
-	"xcore/stats"
+	"v2ray-stat/config"
+	"v2ray-stat/stats"
 )
 
 type User struct {
@@ -672,7 +674,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 			log.Printf("Параметр inbound не указан, используется значение по умолчанию: %s", inboundTag)
 		}
 
-		configPath := cfg.CoreDir + "config.json"
+		configPath := filepath.Join(cfg.CoreDir, "config.json")
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			log.Printf("Error reading config.json: %v", err)
@@ -684,37 +686,6 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 		var configData interface{}
 
 		switch proxyType {
-		case "singbox":
-			var cfgSingBox config.ConfigSingBox
-			if err := json.Unmarshal(data, &cfgSingBox); err != nil {
-				log.Printf("Error parsing JSON: %v", err)
-				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
-				return
-			}
-
-			found := false
-			for i, inbound := range cfgSingBox.Inbounds {
-				if inbound.Tag == inboundTag {
-					for _, user := range inbound.Users {
-						if user.Name == email {
-							http.Error(w, `{"error": "User with this email already exists"}`, http.StatusBadRequest)
-							return
-						}
-					}
-					cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, config.SingBoxUser{
-						Name: email,
-						UUID: uuid,
-					})
-					found = true
-					break
-				}
-			}
-			if !found {
-				http.Error(w, `{"error": "Inbound with tag `+inboundTag+` not found"}`, http.StatusNotFound)
-				return
-			}
-			configData = cfgSingBox
-
 		case "xray":
 			var cfgXray config.ConfigXray
 			if err := json.Unmarshal(data, &cfgXray); err != nil {
@@ -732,7 +703,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 							return
 						}
 					}
-					cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, config.Client{
+					cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, config.XrayClient{
 						Email: email,
 						ID:    uuid,
 					})
@@ -745,10 +716,41 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 				return
 			}
 			configData = cfgXray
-		}
 
-		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s with UUID %s added to config.json with inbound %s", email, uuid, inboundTag)); err != nil {
-			return
+		case "singbox":
+			var cfgSingBox config.ConfigSingbox
+			if err := json.Unmarshal(data, &cfgSingBox); err != nil {
+				log.Printf("Error parsing JSON: %v", err)
+				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
+				return
+			}
+
+			found := false
+			for i, inbound := range cfgSingBox.Inbounds {
+				if inbound.Tag == inboundTag {
+					for _, user := range inbound.Users {
+						if user.Name == email {
+							http.Error(w, `{"error": "User with this email already exists"}`, http.StatusBadRequest)
+							return
+						}
+					}
+					cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, config.SingboxClient{
+						Name: email,
+						UUID: uuid,
+					})
+					found = true
+					break
+				}
+			}
+			if !found {
+				http.Error(w, `{"error": "Inbound with tag `+inboundTag+` not found"}`, http.StatusNotFound)
+				return
+			}
+			configData = cfgSingBox
+
+			if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s with UUID %s added to config.json with inbound %s", email, uuid, inboundTag)); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -774,85 +776,90 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			log.Printf("Параметр inbound не указан, используется значение по умолчанию: %s", inboundTag)
 		}
 
-		configPath := cfg.CoreDir + "config.json"
-		data, err := os.ReadFile(configPath)
+		mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
+		disabledUsersPath := filepath.Join(cfg.CoreDir, "disabled_users.json")
+
+		// Чтение основного конфига
+		mainConfigData, err := os.ReadFile(mainConfigPath)
 		if err != nil {
 			log.Printf("Ошибка чтения config.json: %v", err)
 			http.Error(w, "Не удалось прочитать конфигурацию", http.StatusInternalServerError)
 			return
 		}
+		var mainConfig config.ConfigXray
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			log.Printf("Ошибка разбора JSON для config.json: %v", err)
+			http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
+			return
+		}
 
-		proxyType := cfg.CoreType
-		var configData interface{}
-
-		switch proxyType {
-		case "singbox":
-			var cfgSingBox config.ConfigSingBox
-			if err := json.Unmarshal(data, &cfgSingBox); err != nil {
-				log.Printf("Ошибка разбора JSON: %v", err)
+		// Чтение конфига отключенных пользователей
+		var disabledConfig config.DisabledUsersConfig
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err == nil && len(disabledConfigData) > 0 {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				log.Printf("Ошибка разбора JSON для disabled_users.json: %v", err)
 				http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
 				return
 			}
+		} else {
+			disabledConfig = config.DisabledUsersConfig{Inbounds: []config.XrayInbound{}}
+		}
 
-			found := false
-			for i, inbound := range cfgSingBox.Inbounds {
+		// Функция для удаления пользователя из inbounds
+		removeUser := func(inbounds []config.XrayInbound) ([]config.XrayInbound, bool) {
+			for i, inbound := range inbounds {
 				if inbound.Tag == inboundTag {
-					updatedUsers := make([]config.SingBoxUser, 0, len(inbound.Users))
-					for _, user := range inbound.Users {
-						if user.Name != email {
-							updatedUsers = append(updatedUsers, user)
-						} else {
-							found = true
-						}
-					}
-					if found {
-						cfgSingBox.Inbounds[i].Users = updatedUsers
-						break
-					}
-				}
-			}
-
-			if !found {
-				http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s", email, inboundTag), http.StatusNotFound)
-				return
-			}
-			configData = cfgSingBox
-
-		case "xray":
-			var cfgXray config.ConfigXray
-			if err := json.Unmarshal(data, &cfgXray); err != nil {
-				log.Printf("Ошибка разбора JSON для Xray: %v", err)
-				http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
-				return
-			}
-
-			found := false
-			for i, inbound := range cfgXray.Inbounds {
-				if inbound.Tag == inboundTag {
-					updatedClients := make([]config.Client, 0, len(inbound.Settings.Clients))
+					updatedClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
 					for _, client := range inbound.Settings.Clients {
 						if client.Email != email {
 							updatedClients = append(updatedClients, client)
-						} else {
-							found = true
 						}
 					}
-					if found {
-						cfgXray.Inbounds[i].Settings.Clients = updatedClients
-						break
+					if len(updatedClients) < len(inbound.Settings.Clients) {
+						inbounds[i].Settings.Clients = updatedClients
+						return inbounds, true
 					}
 				}
 			}
+			return inbounds, false
+		}
 
-			if !found {
-				http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s", email, inboundTag), http.StatusNotFound)
+		// Проверка и удаление из config.json
+		mainUpdated, removedFromMain := removeUser(mainConfig.Inbounds)
+		if removedFromMain {
+			mainConfig.Inbounds = mainUpdated
+			if err := saveConfig(w, mainConfigPath, mainConfig, fmt.Sprintf("Пользователь %s успешно удалён из config.json, inbound %s", email, inboundTag)); err != nil {
 				return
 			}
-			configData = cfgXray
-		}
-
-		if err := saveConfig(w, configPath, configData, fmt.Sprintf("Пользователь %s успешно удалён из config.json, inbound %s", email, inboundTag)); err != nil {
+			// Перезапуск Xray
+			if err := exec.Command("systemctl", "restart", "xray").Run(); err != nil {
+				log.Printf("Ошибка перезапуска Xray: %v", err)
+			}
 			return
 		}
+
+		// Проверка и удаление из disabled_users.json
+		disabledUpdated, removedFromDisabled := removeUser(disabledConfig.Inbounds)
+		if removedFromDisabled {
+			disabledConfig.Inbounds = disabledUpdated
+			if len(disabledConfig.Inbounds) > 0 {
+				if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из disabled_users.json, inbound %s", email, inboundTag)); err != nil {
+					return
+				}
+			} else {
+				if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+					log.Printf("Ошибка удаления пустого disabled_users.json: %v", err)
+				}
+			}
+			// Перезапуск Xray (если требуется в вашей конфигурации)
+			if err := exec.Command("systemctl", "restart", "xray").Run(); err != nil {
+				log.Printf("Ошибка перезапуска Xray: %v", err)
+			}
+			return
+		}
+
+		// Если пользователь не найден ни в одном файле
+		http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в disabled_users.json", email, inboundTag), http.StatusNotFound)
 	}
 }
