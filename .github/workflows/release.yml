@@ -51,9 +51,6 @@ jobs:
           cp ${GITHUB_WORKSPACE}/README.md  ./build_assets/README.md
           cp ${GITHUB_WORKSPACE}/LICENSE    ./build_assets/LICENSE
 
-      - name: List build_assets contents
-        run: ls -la build_assets
-
       - name: Create checksums
         run: |
           cd build_assets
@@ -63,12 +60,7 @@ jobs:
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: |
-            ./build_assets/.env
-            ./build_assets/README.md
-            ./build_assets/LICENSE
-            ./build_assets/v2ray-stat_${{ matrix.goos }}_${{ matrix.goarch }}
-            ./build_assets/checksums.txt
+          file: ./build_assets/**
+          file_glob: true
           tag: ${{ github.ref }}
-          file_glob: false
           overwrite: true
