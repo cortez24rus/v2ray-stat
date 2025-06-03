@@ -1,33 +1,59 @@
-name: Release
+name: Build and Release
 
 on:
-  push:
-    tags:
-      - "*"
-
-permissions:
-  contents: write
+  release:
+    types: [published]
 
 jobs:
-  goreleaser:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  build:
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+      fail-fast: false
 
-      - name: Setup Go Environment
+    runs-on: ubuntu-latest
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          check-latest: true
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v2
+      - name: Get project dependencies
+        run: go mod download
+
+      - name: Build v2ray-stat
+        run: |
+          mkdir -p build_assets
+          COMMID=$(git describe --always --dirty)
+          BINARY_NAME="v2ray-stat_${GOOS}_${GOARCH}"
+          echo "Building $BINARY_NAME..."
+          go build -o build_assets/$BINARY_NAME -trimpath -buildvcs=false -ldflags="-X main.Version=${COMMID} -s -w -buildid=" -v .
+
+      - name: Copy additional files
+        run: |
+          cp ${GITHUB_WORKSPACE}/README.md ./build_assets/README.md
+          cp ${GITHUB_WORKSPACE}/LICENSE ./build_assets/LICENSE
+
+      - name: Create checksums
+        run: |
+          cd build_assets
+          sha256sum * > checksums.txt
+
+      - name: Upload binaries to release
+        uses: actions/upload-release-action@v2
         with:
-          version: latest
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.PUBLISHER_TOKEN }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./build_assets/*
+          tag: ${{ github.ref }}
+          file_glob: true
