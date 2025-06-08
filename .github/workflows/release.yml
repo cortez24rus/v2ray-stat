@@ -19,11 +19,16 @@ jobs:
     env:
       GOOS: ${{ matrix.goos }}
       GOARCH: ${{ matrix.goarch }}
-      CGO_ENABLED: 0
+      CGO_ENABLED: 1
 
     steps:
       - name: Checkout codebase
         uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
 
       - name: Set up Go
         uses: actions/setup-go@v5
