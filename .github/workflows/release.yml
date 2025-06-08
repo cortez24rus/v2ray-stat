@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         goos: [linux]
-        goarch: [amd64, arm64]
+        goarch: [amd64]
       fail-fast: false
 
     runs-on: ubuntu-latest
@@ -41,13 +41,16 @@ jobs:
 
       - name: Build v2ray-stat
         run: |
+          VERSION=${{ github.ref_name }}
+          echo "Using version: $VERSION"
           mkdir -p build_assets
-          COMMID=$(git describe --always --dirty)
-          BINARY_NAME="v2ray-stat_${GOOS}_${GOARCH}"
+          BINARY_NAME="v2ray-stat-${GOOS}-${GOARCH}"
           echo "Building $BINARY_NAME..."
           go build -o build_assets/$BINARY_NAME \
-            -trimpath -buildvcs=false \
-            -ldflags="-X main.Version=${COMMID} -s -w -buildid=" \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-X main.Version=$VERSION -s -w \
+            -buildid=" \
             -v .
 
       - name: Copy additional files
