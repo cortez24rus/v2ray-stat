@@ -1,46 +1,70 @@
 # v2ray-stat
 
-Вывод список пользователей
-    curl -X GET http://127.0.0.1:9952/api/v1/users
+API для управления пользователями и статистикой сервера v2ray-stat. Все запросы отправляются на `http://127.0.0.1:9952`. Ниже приведены доступные эндпоинты с примерами использования.
+## Получение данных
+### Список пользователей
+- Получить список всех пользователей.
 
-Вывод статистики
-    curl -X GET http://127.0.0.1:9952/api/v1/stats
+`curl -X GET http://127.0.0.1:9952/api/v1/users`
 
-Вывод статистики dns
-    curl -X GET http://127.0.0.1:9952/api/v1/dns_stats?email=newuser&count=10
+### Статистика сервера
+- Получить общую статистику сервера (трафик, сессии и т.д.).
 
+`curl -X GET http://127.0.0.1:9952/api/v1/stats`
 
-Очистка таблицы dns
-    curl -X POST http://127.0.0.1:9952/api/v1/delete_dns_stats
+### Статистика DNS
+- Получить статистику DNS-запросов для пользователя. Параметры: email — email пользователя, count — количество записей.
 
-Очистка uplink и downlink таблицы traffic_stats
-    curl -X POST http://127.0.0.1:9952/api/v1/reset_traffic_stats
+`curl -X GET http://127.0.0.1:9952/api/v1/dns_stats?email=newuser&count=10`
 
-Очистка uplink и downlink таблицы clients_stats
-    curl -X POST http://127.0.0.1:9952/api/v1/reset_clients_stats
+### Очистка данных
+- Очистка таблицы DNS
+Удалить все записи из таблицы DNS-статистики.
 
-Сброс статистики network
-    curl -X POST http://127.0.0.1:9952/api/v1/reset_traffic
+`curl -X POST http://127.0.0.1:9952/api/v1/delete_dns_stats`
 
+### Сброс трафика в таблице traffic_stats
+- Сбросить значения uplink и downlink в таблице статистики трафика.
 
-Добавление пользователя
-    curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "email=newuser&uuid=123e4567-e89b-12d3-a456-426614174000&inbound=vless-in"
+`curl -X POST http://127.0.0.1:9952/api/v1/reset_traffic_stats`
 
-Удаление пользователя
-    curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?email=newuser&inbound=vless-in"
+### Сброс трафика в таблице clients_stats
+- Сбросить значения uplink и downlink в таблице статистики клиентов.
 
-Включение отключение пользователя
-    curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=true"
-    curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=false"
+`curl -X POST http://127.0.0.1:9952/api/v1/reset_clients_stats`
 
+### Сброс статистики сети
+- Сбросить статистику сетевого трафика.
 
-Смена лимита IP для пользователя
-    curl -X PATCH http://127.0.0.1:9952/api/v1/update_lim_ip -d "email=newuser&lim_ip=5"
+`curl -X POST http://127.0.0.1:9952/api/v1/reset_traffic`
 
-Изменение даты подписки
-    curl -X PATCH http://127.0.0.1:9952/api/v1/adjust_date -d "email=newuser&sub_end=+30:0"
+### Добавление пользователя
+- Добавить нового пользователя с указанным email, UUID и inbound.
 
-Автопродление
-    curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "email=newuser&renew=30"
+`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "email=newuser&uuid=123e4567-e89b-12d3-a456-426614174000&inbound=vless-in"`
 
+### Удаление пользователя
+- Удалить пользователя по email и inbound.
 
+`curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?email=newuser&inbound=vless-in"`
+
+### Включение/отключение пользователя
+- Включить или отключить пользователя, указав enabled=true или enabled=false.
+
+`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=true"
+curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=false"`
+
+### Изменение лимита IP
+- Установить лимит на количество IP-адресов для пользователя.
+
+`curl -X PATCH http://127.0.0.1:9952/api/v1/update_lim_ip -d "email=newuser&lim_ip=5"`
+
+### Изменение даты подписки
+- Продлить подписку пользователя (например, на 30 дней).
+
+`curl -X PATCH http://127.0.0.1:9952/api/v1/adjust_date -d "email=newuser&sub_end=+30:0"`
+
+### Настройка автопродления
+- Включить автопродление подписки для пользователя (например, на 30 дней).
+
+`curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "email=newuser&renew=30"`
