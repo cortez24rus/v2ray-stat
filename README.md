@@ -51,8 +51,10 @@ API для управления пользователями и статисти
 ### Включение/отключение пользователя
 - Включить или отключить пользователя, указав enabled=true или enabled=false.
 
-`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=true"
-curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=false"`
+```
+curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=true"
+curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=false"
+```
 
 ### Изменение лимита IP
 - Установить лимит на количество IP-адресов для пользователя.
