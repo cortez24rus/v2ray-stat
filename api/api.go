@@ -747,10 +747,10 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 				return
 			}
 			configData = cfgSingBox
+		}
 
-			if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s with UUID %s added to config.json with inbound %s", email, uuid, inboundTag)); err != nil {
-				return
-			}
+		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s with UUID %s added to config.json with inbound %s", email, uuid, inboundTag)); err != nil {
+			return
 		}
 	}
 }

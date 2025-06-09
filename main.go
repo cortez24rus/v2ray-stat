@@ -1465,20 +1465,20 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, &dbMutex, statsEnabled, networkEnabled, trafficMonitor, cfg.Services))
 
 	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/add-user", api.AddUserHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/delete-user", api.DeleteUserHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/set-enabled", setEnabledHandler(memDB, cfg))
+	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(memDB, &dbMutex, cfg))
+	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(memDB, &dbMutex, cfg))
+	http.HandleFunc("/api/v1/set_enabled", setEnabledHandler(memDB, cfg))
 
-	http.HandleFunc("/api/v1/dns-stats", api.DnsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/delete-dns-stats", api.DeleteDNSStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/delete_dns-stats", api.DeleteDNSStatsHandler(memDB, &dbMutex))
 
-	http.HandleFunc("/api/v1/reset-traffic", api.ResetTrafficHandler(trafficMonitor))
-	http.HandleFunc("/api/v1/reset-clients-stats", api.ResetClientsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/reset-traffic-stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/reset_traffic", api.ResetTrafficHandler(trafficMonitor))
+	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
 
-	http.HandleFunc("/api/v1/update-lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/adjust-date", adjustDateOffsetHandler(memDB, cfg))
-	http.HandleFunc("/api/v1/update-renew", api.UpdateRenewHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/adjust_date", adjustDateOffsetHandler(memDB, cfg))
+	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
 
 	go func() {
 		log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
