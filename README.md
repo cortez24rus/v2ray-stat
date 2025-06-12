@@ -70,3 +70,30 @@ curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled
 - Включить автопродление подписки для пользователя (например, на 30 дней).
 
 `curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "email=newuser&renew=30"`
+
+### Включение api для ядер
+
+- Singbox
+```
+  "experimental": {
+    "v2ray_api": {
+      "listen": "127.0.0.1:9953",
+      "stats": {
+        "enabled": true,
+        "inbounds": [
+          "trojan-in",
+          "vless-in"
+        ],
+        "outbounds": [
+          "warp",
+          "direct",
+          "IPv4"
+        ],
+        "users": [
+          "user1",
+          "user2"
+        ]
+      }
+    }
+  }
+```
