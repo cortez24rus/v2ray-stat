@@ -18,61 +18,69 @@ import (
 )
 
 type User struct {
-	Email   string `json:"email"`
-	Enabled string `json:"enabled"`
-	Sub_end string `json:"sub_end"`
-	Lim_ip  string `json:"lim_ip"`
-	Renew   int    `json:"renew"`
+    Email       string `json:"email"`
+    Uuid        string `json:"uuid"`
+    Status      string `json:"status"`
+    Enabled     string `json:"enabled"`
+    Created     string `json:"created"`
+    Sub_end     string `json:"sub_end"`
+    Renew       int    `json:"renew"`
+    Lim_ip      int    `json:"lim_ip"`
+    Ips         string `json:"ips"`
+    Uplink      int64  `json:"uplink"`
+    Downlink    int64  `json:"downlink"`
+    Sess_uplink int64  `json:"sess_uplink"`
+    Sess_downlink int64 `json:"sess_downlink"`
 }
 
 func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    return func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
-		if r.Method != http.MethodGet {
-			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
-			return
-		}
+        if r.Method != http.MethodGet {
+            http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
+            return
+        }
 
-		if memDB == nil {
-			http.Error(w, "Database not initialized", http.StatusInternalServerError)
-			return
-		}
+        if memDB == nil {
+            http.Error(w, "Database not initialized", http.StatusInternalServerError)
+            return
+        }
 
-		dbMutex.Lock()
-		defer dbMutex.Unlock()
+        dbMutex.Lock()
+        defer dbMutex.Unlock()
 
-		rows, err := memDB.Query("SELECT email, enabled, sub_end, renew, lim_ip FROM clients_stats")
-		if err != nil {
-			log.Printf("Error executing SQL query: %v", err)
-			http.Error(w, "Error executing query", http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
+        rows, err := memDB.Query("SELECT email, uuid, status, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
+        if err != nil {
+            log.Printf("Error executing SQL query: %v", err)
+            http.Error(w, "Error executing query", http.StatusInternalServerError)
+            return
+        }
+        defer rows.Close()
 
-		var users []User
-		for rows.Next() {
-			var user User
-			if err := rows.Scan(&user.Email, &user.Enabled, &user.Sub_end, &user.Renew, &user.Lim_ip); err != nil {
-				log.Printf("Error reading result: %v", err)
-				http.Error(w, "Error processing data", http.StatusInternalServerError)
-				return
-			}
-			users = append(users, user)
-		}
+        var users []User
+        for rows.Next() {
+            var user User
+            if err := rows.Scan(&user.Email, &user.Uuid, &user.Status, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
+                log.Printf("Error reading result: %v", err)
+                http.Error(w, "Error processing data", http.StatusInternalServerError)
+                return
+            }
+            users = append(users, user)
+        }
 
-		if err := rows.Err(); err != nil {
-			log.Printf("Error in query result: %v", err)
-			http.Error(w, "Error processing data", http.StatusInternalServerError)
-			return
-		}
+        if err := rows.Err(); err != nil {
+            log.Printf("Error in query result: %v", err)
+            http.Error(w, "Error processing data", http.StatusInternalServerError)
+            return
+        }
 
-		if err := json.NewEncoder(w).Encode(users); err != nil {
-			log.Printf("Error encoding JSON: %v", err)
-			http.Error(w, "Error forming response", http.StatusInternalServerError)
-			return
-		}
-	}
+        if err := json.NewEncoder(w).Encode(users); err != nil {
+            log.Printf("Error encoding JSON: %v", err)
+            http.Error(w, "Error forming response", http.StatusInternalServerError)
+            return
+        }
+    }
 }
 
 func contains(slice []string, item string) bool {
