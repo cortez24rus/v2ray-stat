@@ -269,7 +269,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	if err == nil {
 		// Проверяем, не пустой ли файл
 		if len(disabledData) != 0 {
-			var disabledCfg config.DisabledUsersConfig
+			var disabledCfg config.DisabledUsersConfigXray
 			if err := json.Unmarshal(disabledData, &disabledCfg); err != nil {
 				log.Printf("Ошибка парсинга JSON из disabled_users.json: %v", err)
 			} else {
@@ -1260,16 +1260,16 @@ func toggleUserEnabled(email string, enabled bool, cfg *config.Config, memDB *sq
 	}
 
 	// Read disabled users config
-	var disabledConfig config.DisabledUsersConfig
+	var disabledConfig config.DisabledUsersConfigXray
 	disabledConfigData, err := os.ReadFile(disabledUsersPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			disabledConfig = config.DisabledUsersConfig{Inbounds: []config.XrayInbound{}}
+			disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
 		} else {
 			return fmt.Errorf("ошибка чтения файла отключенных пользователей: %v", err)
 		}
 	} else if len(disabledConfigData) == 0 {
-		disabledConfig = config.DisabledUsersConfig{Inbounds: []config.XrayInbound{}}
+		disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
 	} else {
 		if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
 			return fmt.Errorf("ошибка разбора файла отключенных пользователей: %v", err)
@@ -1393,13 +1393,6 @@ func toggleUserEnabled(email string, enabled bool, cfg *config.Config, memDB *sq
 
 	updateEnabledInDB(memDB, email, enabled)
 
-	// Restart Xray
-	if err := exec.Command("systemctl", "restart", "xray").Run(); err != nil {
-		log.Printf("ошибка перезапуска Xray: %v", err)
-		return fmt.Errorf("ошибка перезапуска Xray: %v", err)
-	}
-	time.Sleep(2 * time.Second) // Allow Xray to restart
-
 	log.Printf("Пользователь %s успешно перемещен (enabled=%t) в inbounds", email, enabled)
 	return nil
 }
@@ -1425,11 +1418,11 @@ func setEnabledHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		email := r.FormValue("email")
+		email := r.FormValue("user")
 		enabledStr := r.FormValue("enabled")
 
 		if email == "" {
-			http.Error(w, "email is required", http.StatusBadRequest)
+			http.Error(w, "user is required", http.StatusBadRequest)
 			return
 		}
 

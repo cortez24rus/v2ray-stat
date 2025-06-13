@@ -1,6 +1,6 @@
 package config
 
-type DisabledUsersConfig struct {
+type DisabledUsersConfigXray struct {
 	Inbounds []XrayInbound `json:"inbounds"`
 }
 
@@ -42,6 +42,10 @@ type ConfigXray struct {
 	Transport        map[string]any   `json:"transport,omitempty"`
 	Observatory      map[string]any   `json:"observatory,omitempty"`
 	BurstObservatory map[string]any   `json:"burstObservatory,omitempty"`
+}
+
+type DisabledUsersConfigSingbox struct {
+	Inbounds []SingboxInbound `json:"inbounds"`
 }
 
 type SingboxClient struct {
