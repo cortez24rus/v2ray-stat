@@ -1195,17 +1195,17 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 			http.Error(w, "Error parsing form data", http.StatusBadRequest)
 			return
 		}
-		email := r.FormValue("email")
+		userIdentifier := r.FormValue("user")
 		sub_end := r.FormValue("sub_end")
-		if email == "" || sub_end == "" {
-			http.Error(w, "email and sub_end are required", http.StatusBadRequest)
+		if userIdentifier == "" || sub_end == "" {
+			http.Error(w, "user and sub_end are required", http.StatusBadRequest)
 			return
 		}
 
 		dbMutex.Lock()
 		baseDate := time.Now().UTC()
 		var subEndStr string
-		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", email).Scan(&subEndStr)
+		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE user = ?", userIdentifier).Scan(&subEndStr)
 		if err != nil && err != sql.ErrNoRows {
 			dbMutex.Unlock()
 			log.Printf("Error querying database: %v", err)
@@ -1221,7 +1221,7 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 				return
 			}
 		}
-		err = adjustDateOffset(memDB, email, sub_end, baseDate)
+		err = adjustDateOffset(memDB, userIdentifier, sub_end, baseDate)
 		dbMutex.Unlock()
 
 		if err != nil {
@@ -1235,9 +1235,9 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 		}()
 
 		w.WriteHeader(http.StatusOK)
-		_, err = fmt.Fprintf(w, "Subscription date for %s updated with sub_end %s\n", email, sub_end)
+		_, err = fmt.Fprintf(w, "Subscription date for %s updated with sub_end %s\n", userIdentifier, sub_end)
 		if err != nil {
-			log.Printf("Error writing response for email %s: %v", email, err)
+			log.Printf("Error writing response for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error sending response", http.StatusInternalServerError)
 			return
 		}

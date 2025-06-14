@@ -409,11 +409,11 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			return
 		}
 
-		email := r.FormValue("email")
+		userIdentifier := r.FormValue("user")
 		ipLimit := r.FormValue("lim_ip")
 
-		if email == "" {
-			http.Error(w, "Invalid parameters. Use email", http.StatusBadRequest)
+		if userIdentifier == "" {
+			http.Error(w, "Invalid parameters. Use user", http.StatusBadRequest)
 			return
 		}
 
@@ -438,29 +438,29 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		defer dbMutex.Unlock()
 
 		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
-		result, err := memDB.Exec(query, ipLimitInt, email)
+		result, err := memDB.Exec(query, ipLimitInt, userIdentifier)
 		if err != nil {
-			log.Printf("Error updating lim_ip for email %s: %v", email, err)
+			log.Printf("Error updating lim_ip for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating lim_ip", http.StatusInternalServerError)
 			return
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			log.Printf("Error checking rows affected for email %s: %v", email, err)
+			log.Printf("Error checking rows affected for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error processing update", http.StatusInternalServerError)
 			return
 		}
 
 		if rowsAffected == 0 {
-			http.Error(w, fmt.Sprintf("User '%s' not found", email), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("User '%s' not found", userIdentifier), http.StatusNotFound)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, err = fmt.Fprintf(w, "lim_ip for '%s' updated to '%d'\n", email, ipLimitInt)
+		_, err = fmt.Fprintf(w, "lim_ip for '%s' updated to '%d'\n", userIdentifier, ipLimitInt)
 		if err != nil {
-			log.Printf("Error writing response for email %s: %v", email, err)
+			log.Printf("Error writing response for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error sending response", http.StatusInternalServerError)
 			return
 		}
@@ -586,11 +586,11 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			return
 		}
 
-		email := r.FormValue("email")
+		userIdentifier := r.FormValue("user")
 		renewStr := r.FormValue("renew")
 
-		if email == "" {
-			http.Error(w, "email is required", http.StatusBadRequest)
+		if userIdentifier == "" {
+			http.Error(w, "user is required", http.StatusBadRequest)
 			return
 		}
 
@@ -613,9 +613,9 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
-		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE email = ?", renew, email)
+		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE email = ?", renew, userIdentifier)
 		if err != nil {
-			log.Printf("Error updating renew for %s: %v", email, err)
+			log.Printf("Error updating renew for %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating database", http.StatusInternalServerError)
 			return
 		}
@@ -628,11 +628,11 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		}
 
 		if rowsAffected == 0 {
-			http.Error(w, fmt.Sprintf("User '%s' not found", email), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("User '%s' not found", userIdentifier), http.StatusNotFound)
 			return
 		}
 
-		log.Printf("Auto-renewal set to %d for user %s", renew, email)
+		log.Printf("Auto-renewal set to %d for user %s", renew, userIdentifier)
 		w.WriteHeader(http.StatusOK)
 	}
 }

@@ -13,9 +13,9 @@ API для управления пользователями и статисти
 `curl -X GET http://127.0.0.1:9952/api/v1/stats`
 
 ### Статистика DNS
-- Получить статистику DNS-запросов для пользователя. Параметры: email — email пользователя, count — количество записей.
+- Получить статистику DNS-запросов для пользователя. Параметры: user — user пользователя, count — количество записей.
 
-`curl -X GET http://127.0.0.1:9952/api/v1/dns_stats?email=newuser&count=10`
+`curl -X GET http://127.0.0.1:9952/api/v1/dns_stats?user=newuser&count=10`
 
 ### Очистка данных
 - Очистка таблицы DNS
@@ -39,37 +39,36 @@ API для управления пользователями и статисти
 `curl -X POST http://127.0.0.1:9952/api/v1/reset_traffic`
 
 ### Добавление пользователя
-- Добавить нового пользователя с указанным email, UUID и inbound.
+- Добавить нового пользователя с указанным user, UUID и inboundTag.
 
-`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "email=newuser&uuid=123e4567-e89b-12d3-a456-426614174000&inbound=vless-in"`
+`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=vless-in"`
+`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=trojan-in"`
 
 ### Удаление пользователя
-- Удалить пользователя по email и inbound.
+- Удалить пользователя по user и inboundTag.
 
-`curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?email=newuser&inbound=vless-in"`
+`curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?user=newuser&inboundTag=vless-in"`
 
 ### Включение/отключение пользователя
 - Включить или отключить пользователя, указав enabled=true или enabled=false.
 
-```
-curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=true"
-curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "email=newuser&enabled=false"
-```
+`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=true"`
+`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=false"`
 
 ### Изменение лимита IP
 - Установить лимит на количество IP-адресов для пользователя.
 
-`curl -X PATCH http://127.0.0.1:9952/api/v1/update_lim_ip -d "email=newuser&lim_ip=5"`
+`curl -X PATCH http://127.0.0.1:9952/api/v1/update_lim_ip -d "user=newuser&lim_ip=5"`
 
 ### Изменение даты подписки
 - Продлить подписку пользователя (например, на 30 дней).
 
-`curl -X PATCH http://127.0.0.1:9952/api/v1/adjust_date -d "email=newuser&sub_end=+30:0"`
+`curl -X PATCH http://127.0.0.1:9952/api/v1/adjust_date -d "user=newuser&sub_end=+30:0"`
 
 ### Настройка автопродления
 - Включить автопродление подписки для пользователя (например, на 30 дней).
 
-`curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "email=newuser&renew=30"`
+`curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "user=newuser&renew=30"`
 
 ### Включение api для ядер
 
