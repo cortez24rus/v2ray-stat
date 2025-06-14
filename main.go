@@ -262,21 +262,21 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 		}
 	}
 
-	// Чтение и обработка disabled_users.json
-	disabledUsersPath := filepath.Join(cfg.CoreDir, "disabled_users.json")
+	// Чтение и обработка .disabled_users
+	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
 	disabledData, err := os.ReadFile(disabledUsersPath)
 	if err == nil {
 		// Проверяем, не пустой ли файл
 		if len(disabledData) != 0 {
 			var disabledCfg config.DisabledUsersConfigXray
 			if err := json.Unmarshal(disabledData, &disabledCfg); err != nil {
-				log.Printf("Ошибка парсинга JSON из disabled_users.json: %v", err)
+				log.Printf("Ошибка парсинга JSON из .disabled_users: %v", err)
 			} else {
 				extractClients(disabledCfg.Inbounds)
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		log.Printf("Ошибка чтения disabled_users.json: %v", err)
+		log.Printf("Ошибка чтения .disabled_users: %v", err)
 	}
 
 	// Преобразование карты в список
@@ -1246,7 +1246,7 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 
 func toggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
 	mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
-	disabledUsersPath := filepath.Join(cfg.CoreDir, "disabled_users.json")
+	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
 
 	switch cfg.CoreType {
 	case "xray":
@@ -1387,7 +1387,7 @@ func toggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
             }
         } else {
             if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-                log.Printf("Ошибка удаления пустого disabled_users.json для Xray: %v", err)
+                log.Printf("Ошибка удаления пустого .disabled_users для Xray: %v", err)
             }
         }
 
@@ -1529,7 +1529,7 @@ case "singbox":
             }
         } else {
             if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-                log.Printf("Ошибка удаления пустого disabled_users.json для Singbox: %v", err)
+                log.Printf("Ошибка удаления пустого .disabled_users для Singbox: %v", err)
             }
         }
     }

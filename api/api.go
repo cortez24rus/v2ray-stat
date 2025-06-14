@@ -807,7 +807,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 		}
 
 		configPath := filepath.Join(cfg.CoreDir, "config.json")
-		disabledUsersPath := filepath.Join(cfg.CoreDir, "disabled_users.json")
+		disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
 
 		proxyType := cfg.CoreType
 
@@ -832,7 +832,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			disabledConfigData, err := os.ReadFile(disabledUsersPath)
 			if err == nil && len(disabledConfigData) > 0 {
 				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Ошибка разбора JSON для disabled_users.json: %v", err)
+					log.Printf("Ошибка разбора JSON для .disabled_users: %v", err)
 					http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
 					return
 				}
@@ -869,24 +869,24 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 				return
 			}
 
-			// Проверка и удаление из disabled_users.json
+			// Проверка и удаление из .disabled_users
 			disabledUpdated, removedFromDisabled := removeXrayUser(disabledConfig.Inbounds)
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из disabled_users.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
 						return
 					}
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Ошибка удаления пустого disabled_users.json: %v", err)
+						log.Printf("Ошибка удаления пустого .disabled_users: %v", err)
 					}
 				}
 				return
 			}
 
 			// Если пользователь не найден
-			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в disabled_users.json", userIdentifier, inboundTag), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
 
 		case "singbox":
 			// Чтение основного конфига Singbox
@@ -908,7 +908,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			disabledConfigData, err := os.ReadFile(disabledUsersPath)
 			if err == nil && len(disabledConfigData) > 0 {
 				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Ошибка разбора JSON для disabled_users.json: %v", err)
+					log.Printf("Ошибка разбора JSON для .disabled_users: %v", err)
 					http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
 					return
 				}
@@ -945,24 +945,24 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 				return
 			}
 
-			// Проверка и удаление из disabled_users.json
+			// Проверка и удаление из .disabled_users
 			disabledUpdated, removedFromDisabled := removeSingboxUser(disabledConfig.Inbounds)
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из disabled_users.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
 						return
 					}
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Ошибка удаления пустого disabled_users.json: %v", err)
+						log.Printf("Ошибка удаления пустого .disabled_users: %v", err)
 					}
 				}
 				return
 			}
 
 			// Если пользователь не найден
-			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в disabled_users.json", userIdentifier, inboundTag), http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
 		}
 	}
 }
