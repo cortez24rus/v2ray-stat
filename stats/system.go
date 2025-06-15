@@ -25,18 +25,18 @@ var (
 	memoryPercentages []float64
 )
 
-// isServiceRunning возвращает true, если процесс с именем svc найден в /proc
+// isServiceRunning returns true if a process with the name svc is found in /proc
 func isServiceRunning(svc string) bool {
 	procDir, err := os.Open("/proc")
 	if err != nil {
-		log.Printf("Ошибка открытия /proc для службы %s: %v", svc, err)
+		log.Printf("Error opening /proc for service %s: %v", svc, err)
 		return false
 	}
 	defer procDir.Close()
 
 	entries, err := procDir.Readdirnames(-1)
 	if err != nil {
-		log.Printf("Ошибка чтения /proc для службы %s: %v", svc, err)
+		log.Printf("Error reading /proc for service %s: %v", svc, err)
 		return false
 	}
 
@@ -47,18 +47,17 @@ func isServiceRunning(svc string) bool {
 		commPath := filepath.Join("/proc", entry, "comm")
 		commData, err := os.ReadFile(commPath)
 		if err != nil {
+			log.Printf("Error reading %s for service %s: %v", commPath, svc, err)
 			continue
 		}
 		if strings.TrimSpace(string(commData)) == svc {
-			// log.Printf("Служба %s найдена в /proc/%s/comm", svc, entry)
 			return true
 		}
 	}
-	// log.Printf("Служба %s не найдена в /proc", svc)
 	return false
 }
 
-// CheckServiceStatus проверяет статусы сервисов и шлёт уведомление, если что-то изменилось
+// CheckServiceStatus checks service statuses and sends a notification if something changes
 func CheckServiceStatus(services []string, token, chatID string) {
 	statusMutex.Lock()
 	defer statusMutex.Unlock()
@@ -100,6 +99,7 @@ func CheckServiceStatus(services []string, token, chatID string) {
 func GetUptime() string {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
+		log.Printf("Error reading /proc/uptime: %v", err)
 		return "unknown"
 	}
 	var uptimeSeconds float64
@@ -115,6 +115,7 @@ func GetUptime() string {
 func GetLoadAverage() string {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
+		log.Printf("Error reading /proc/loadavg: %v", err)
 		return "unknown"
 	}
 	var load1, load5, load15 float64
@@ -126,6 +127,7 @@ func GetLoadAverage() string {
 func GetMemoryUsage() string {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
+		log.Printf("Error reading /proc/meminfo: %v", err)
 		return "unknown"
 	}
 
@@ -145,6 +147,7 @@ func GetMemoryUsage() string {
 	}
 
 	if memTotal == 0 {
+		log.Printf("Invalid memory data: MemTotal is zero")
 		return "unknown"
 	}
 
@@ -177,6 +180,7 @@ func CheckMemoryUsage(token string, chatID string, threshold int, interval int) 
 	}
 
 	if memTotal == 0 {
+		log.Printf("Invalid memory data: MemTotal is zero")
 		return
 	}
 
@@ -228,6 +232,7 @@ func CheckMemoryUsage(token string, chatID string, threshold int, interval int) 
 func GetDiskUsage() string {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs("/", &stat); err != nil {
+		log.Printf("Error getting disk usage: %v", err)
 		return "unknown"
 	}
 
@@ -236,6 +241,7 @@ func GetDiskUsage() string {
 	used := total - free
 
 	if total == 0 {
+		log.Printf("Invalid disk data: total size is zero")
 		return "unknown"
 	}
 
@@ -256,6 +262,7 @@ func CheckDiskUsage(token string, chatID string, threshold int, interval int) {
 	used := total - free
 
 	if total == 0 {
+		log.Printf("Invalid disk data: total size is zero")
 		return
 	}
 
@@ -313,25 +320,27 @@ func GetStatus(services []string) string {
 		isRunning := false
 		procDir, err := os.Open("/proc")
 		if err != nil {
-			log.Printf("Error opening /proc: %v", err)
+			log.Printf("Error opening /proc for service %s: %v", svc, err)
 			continue
 		}
 		defer procDir.Close()
 		entries, err := procDir.Readdirnames(-1)
 		if err != nil {
-			log.Printf("Error reading /proc: %v", err)
+			log.Printf("Error reading /proc for service %s: %v", svc, err)
 			continue
 		}
 		for _, entry := range entries {
 			if _, err := strconv.Atoi(entry); err == nil {
 				commPath := filepath.Join("/proc", entry, "comm")
 				commData, err := os.ReadFile(commPath)
-				if err == nil {
-					comm := strings.TrimSpace(string(commData))
-					if comm == svc {
-						isRunning = true
-						break
-					}
+				if err != nil {
+					log.Printf("Error reading %s for service %s: %v", commPath, svc, err)
+					continue
+				}
+				comm := strings.TrimSpace(string(commData))
+				if comm == svc {
+					isRunning = true
+					break
 				}
 			}
 		}
