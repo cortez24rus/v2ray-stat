@@ -1,7 +1,6 @@
 # v2ray-stat
 
 API для управления пользователями и статистикой сервера v2ray-stat. Все запросы отправляются на `http://127.0.0.1:9952`. Ниже приведены доступные эндпоинты с примерами использования.
-## Получение данных
 ### Список пользователей
 - Получить список всех пользователей.
 
@@ -42,7 +41,8 @@ API для управления пользователями и статисти
 - Добавить нового пользователя с указанным user, UUID и inboundTag.
 
 `curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=vless-in"`
-`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=trojan-in"`
+
+`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=tAmkh1Sn4NbiJ3pGTF5V9kek1l5LWW&inboundTag=trojan-in"`
 
 ### Удаление пользователя
 - Удалить пользователя по user и inboundTag.
@@ -53,6 +53,7 @@ API для управления пользователями и статисти
 - Включить или отключить пользователя, указав enabled=true или enabled=false.
 
 `curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=true"`
+
 `curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=false"`
 
 ### Изменение лимита IP
