@@ -2,6 +2,7 @@ package stats
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ type TrafficMonitor struct {
 func NewTrafficMonitor(iface string) (*TrafficMonitor, error) {
 	initialStats, err := readNetworkStats(iface)
 	if err != nil {
+		log.Printf("Error initializing traffic monitor: %v", err)
 		return nil, fmt.Errorf("failed to initialize traffic monitor: %v", err)
 	}
 
@@ -51,6 +53,7 @@ func NewTrafficMonitor(iface string) (*TrafficMonitor, error) {
 func (tm *TrafficMonitor) UpdateStats() error {
 	stats, err := readNetworkStats(tm.Iface)
 	if err != nil {
+		log.Printf("Error updating network stats: %v", err)
 		return fmt.Errorf("failed to update network stats: %v", err)
 	}
 
@@ -83,6 +86,7 @@ func (tm *TrafficMonitor) UpdateStats() error {
 func (tm *TrafficMonitor) ResetTraffic() error {
 	stats, err := readNetworkStats(tm.Iface)
 	if err != nil {
+		log.Printf("Error resetting traffic: %v", err)
 		return fmt.Errorf("failed to reset traffic: %v", err)
 	}
 
@@ -106,6 +110,7 @@ func (tm *TrafficMonitor) GetStats() (rxSpeed, txSpeed, rxPacketsPerSec, txPacke
 func readNetworkStats(iface string) (NetworkStats, error) {
 	data, err := os.ReadFile("/proc/net/dev")
 	if err != nil {
+		log.Printf("Error reading /proc/net/dev: %v", err)
 		return NetworkStats{}, fmt.Errorf("failed to read /proc/net/dev: %v", err)
 	}
 
@@ -115,29 +120,35 @@ func readNetworkStats(iface string) (NetworkStats, error) {
 		if strings.HasPrefix(line, iface+":") {
 			fields := strings.Fields(line)
 			if len(fields) < 10 {
+				log.Printf("Invalid data format for interface %s", iface)
 				return NetworkStats{}, fmt.Errorf("invalid data format for interface %s", iface)
 			}
 
 			var stats NetworkStats
 			_, err := fmt.Sscanf(fields[1], "%d", &stats.RxBytes)
 			if err != nil {
+				log.Printf("Error parsing rx bytes for interface %s: %v", iface, err)
 				return NetworkStats{}, fmt.Errorf("failed to parse rx bytes: %v", err)
 			}
 			_, err = fmt.Sscanf(fields[2], "%d", &stats.RxPackets)
 			if err != nil {
+				log.Printf("Error parsing rx packets for interface %s: %v", iface, err)
 				return NetworkStats{}, fmt.Errorf("failed to parse rx packets: %v", err)
 			}
 			_, err = fmt.Sscanf(fields[9], "%d", &stats.TxBytes)
 			if err != nil {
+				log.Printf("Error parsing tx bytes for interface %s: %v", iface, err)
 				return NetworkStats{}, fmt.Errorf("failed to parse tx bytes: %v", err)
 			}
 			_, err = fmt.Sscanf(fields[10], "%d", &stats.TxPackets)
 			if err != nil {
+				log.Printf("Error parsing tx packets for interface %s: %v", iface, err)
 				return NetworkStats{}, fmt.Errorf("failed to parse tx packets: %v", err)
 			}
 			return stats, nil
 		}
 	}
+	log.Printf("Interface %s not found in /proc/net/dev", iface)
 	return NetworkStats{}, fmt.Errorf("interface %s not found", iface)
 }
 
