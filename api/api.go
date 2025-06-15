@@ -17,69 +17,69 @@ import (
 )
 
 type User struct {
-    Email       string `json:"email"`
-    Uuid        string `json:"uuid"`
-    Status      string `json:"status"`
-    Enabled     string `json:"enabled"`
-    Created     string `json:"created"`
-    Sub_end     string `json:"sub_end"`
-    Renew       int    `json:"renew"`
-    Lim_ip      int    `json:"lim_ip"`
-    Ips         string `json:"ips"`
-    Uplink      int64  `json:"uplink"`
-    Downlink    int64  `json:"downlink"`
-    Sess_uplink int64  `json:"sess_uplink"`
-    Sess_downlink int64 `json:"sess_downlink"`
+	Email         string `json:"email"`
+	Uuid          string `json:"uuid"`
+	Status        string `json:"status"`
+	Enabled       string `json:"enabled"`
+	Created       string `json:"created"`
+	Sub_end       string `json:"sub_end"`
+	Renew         int    `json:"renew"`
+	Lim_ip        int    `json:"lim_ip"`
+	Ips           string `json:"ips"`
+	Uplink        int64  `json:"uplink"`
+	Downlink      int64  `json:"downlink"`
+	Sess_uplink   int64  `json:"sess_uplink"`
+	Sess_downlink int64  `json:"sess_downlink"`
 }
 
 func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
-        if r.Method != http.MethodGet {
-            http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
-            return
-        }
+		if r.Method != http.MethodGet {
+			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
+			return
+		}
 
-        if memDB == nil {
-            http.Error(w, "Database not initialized", http.StatusInternalServerError)
-            return
-        }
+		if memDB == nil {
+			http.Error(w, "Database not initialized", http.StatusInternalServerError)
+			return
+		}
 
-        dbMutex.Lock()
-        defer dbMutex.Unlock()
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 
-        rows, err := memDB.Query("SELECT email, uuid, status, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
-        if err != nil {
-            log.Printf("Error executing SQL query: %v", err)
-            http.Error(w, "Error executing query", http.StatusInternalServerError)
-            return
-        }
-        defer rows.Close()
+		rows, err := memDB.Query("SELECT email, uuid, status, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
+		if err != nil {
+			log.Printf("Error executing SQL query: %v", err)
+			http.Error(w, "Error executing query", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
 
-        var users []User
-        for rows.Next() {
-            var user User
-            if err := rows.Scan(&user.Email, &user.Uuid, &user.Status, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
-                log.Printf("Error reading result: %v", err)
-                http.Error(w, "Error processing data", http.StatusInternalServerError)
-                return
-            }
-            users = append(users, user)
-        }
+		var users []User
+		for rows.Next() {
+			var user User
+			if err := rows.Scan(&user.Email, &user.Uuid, &user.Status, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
+				log.Printf("Error reading result: %v", err)
+				http.Error(w, "Error processing data", http.StatusInternalServerError)
+				return
+			}
+			users = append(users, user)
+		}
 
-        if err := rows.Err(); err != nil {
-            log.Printf("Error in query result: %v", err)
-            http.Error(w, "Error processing data", http.StatusInternalServerError)
-            return
-        }
+		if err := rows.Err(); err != nil {
+			log.Printf("Error in query result: %v", err)
+			http.Error(w, "Error processing data", http.StatusInternalServerError)
+			return
+		}
 
-        if err := json.NewEncoder(w).Encode(users); err != nil {
-            log.Printf("Error encoding JSON: %v", err)
-            http.Error(w, "Error forming response", http.StatusInternalServerError)
-            return
-        }
-    }
+		if err := json.NewEncoder(w).Encode(users); err != nil {
+			log.Printf("Error encoding JSON: %v", err)
+			http.Error(w, "Error forming response", http.StatusInternalServerError)
+			return
+		}
+	}
 }
 
 func contains(slice []string, item string) bool {
@@ -673,13 +673,13 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 		credential := r.FormValue("credential")
 		inboundTag := r.FormValue("inboundTag")
 		if userIdentifier == "" || credential == "" {
-			log.Printf("Ошибка: параметр user и credential отсутствует или пустой")
+			log.Printf("Error: user and credential parameters are missing or empty")
 			http.Error(w, "user and credential are required", http.StatusBadRequest)
 			return
 		}
 		if inboundTag == "" {
-			inboundTag = "vless-in" // Значение по умолчанию
-			log.Printf("Параметр inboundTag не указан, используется значение по умолчанию: %s", inboundTag)
+			inboundTag = "vless-in" // Default value
+			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
 		configPath := filepath.Join(cfg.CoreDir, "config.json")
@@ -790,20 +790,20 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		if r.Method != http.MethodDelete {
-			http.Error(w, "Недопустимый метод. Используйте DELETE", http.StatusMethodNotAllowed)
+			http.Error(w, "Invalid method. Use DELETE", http.StatusMethodNotAllowed)
 			return
 		}
 
-		userIdentifier := r.FormValue("user") // Для Xray это email, для Singbox это name
+		userIdentifier := r.FormValue("user") // For Xray this is email, for Singbox this is name
 		inboundTag := r.FormValue("inboundTag")
 		if userIdentifier == "" {
-			log.Printf("Ошибка: параметр user отсутствует или пустой")
-			http.Error(w, "Параметр user обязателен", http.StatusBadRequest)
+			log.Printf("Error: user parameter is missing or empty")
+			http.Error(w, "user parameter is required", http.StatusBadRequest)
 			return
 		}
 		if inboundTag == "" {
-			inboundTag = "vless-in" // Значение по умолчанию
-			log.Printf("Параметр inboundTag не указан, используется значение по умолчанию: %s", inboundTag)
+			inboundTag = "vless-in" // Default value
+			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
 		configPath := filepath.Join(cfg.CoreDir, "config.json")
@@ -813,34 +813,34 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 
 		switch proxyType {
 		case "xray":
-			// Чтение основного конфига
+			// Read main config
 			mainConfigData, err := os.ReadFile(configPath)
 			if err != nil {
-				log.Printf("Ошибка чтения config.json: %v", err)
-				http.Error(w, "Не удалось прочитать конфигурацию", http.StatusInternalServerError)
+				log.Printf("Error reading config.json: %v", err)
+				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
 				return
 			}
 			var mainConfig config.ConfigXray
 			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-				log.Printf("Ошибка разбора JSON для config.json: %v", err)
-				http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
+				log.Printf("Error parsing JSON for config.json: %v", err)
+				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
 				return
 			}
 
-			// Чтение конфига отключенных пользователей
+			// Read disabled users config
 			var disabledConfig config.DisabledUsersConfigXray
 			disabledConfigData, err := os.ReadFile(disabledUsersPath)
 			if err == nil && len(disabledConfigData) > 0 {
 				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Ошибка разбора JSON для .disabled_users: %v", err)
-					http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
+					log.Printf("Error parsing JSON for .disabled_users: %v", err)
+					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
 					return
 				}
 			} else {
 				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
 			}
 
-			// Функция для удаления пользователя из inbounds (Xray)
+			// Function to remove user from inbounds (Xray)
 			removeXrayUser := func(inbounds []config.XrayInbound) ([]config.XrayInbound, bool) {
 				for i, inbound := range inbounds {
 					if inbound.Tag == inboundTag {
@@ -859,64 +859,64 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 				return inbounds, false
 			}
 
-			// Проверка и удаление из config.json
+			// Check and remove from config.json
 			mainUpdated, removedFromMain := removeXrayUser(mainConfig.Inbounds)
 			if removedFromMain {
 				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("Пользователь %s успешно удалён из config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
 					return
 				}
 				return
 			}
 
-			// Проверка и удаление из .disabled_users
+			// Check and remove from .disabled_users
 			disabledUpdated, removedFromDisabled := removeXrayUser(disabledConfig.Inbounds)
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
 						return
 					}
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Ошибка удаления пустого .disabled_users: %v", err)
+						log.Printf("Error removing empty .disabled_users: %v", err)
 					}
 				}
 				return
 			}
 
-			// Если пользователь не найден
-			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
+			// If user not found
+			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
 
 		case "singbox":
-			// Чтение основного конфига Singbox
+			// Read main config Singbox
 			mainConfigData, err := os.ReadFile(configPath)
 			if err != nil {
-				log.Printf("Ошибка чтения config.json: %v", err)
-				http.Error(w, "Не удалось прочитать конфигурацию", http.StatusInternalServerError)
+				log.Printf("Error reading config.json: %v", err)
+				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
 				return
 			}
 			var mainConfig config.ConfigSingbox
 			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-				log.Printf("Ошибка разбора JSON для config.json: %v", err)
-				http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
+				log.Printf("Error parsing JSON for config.json: %v", err)
+				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
 				return
 			}
 
-			// Чтение конфига отключенных пользователей Singbox
+			// Read disabled users config Singbox
 			var disabledConfig config.DisabledUsersConfigSingbox
 			disabledConfigData, err := os.ReadFile(disabledUsersPath)
 			if err == nil && len(disabledConfigData) > 0 {
 				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Ошибка разбора JSON для .disabled_users: %v", err)
-					http.Error(w, "Не удалось разобрать конфигурацию", http.StatusInternalServerError)
+					log.Printf("Error parsing JSON for .disabled_users: %v", err)
+					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
 					return
 				}
 			} else {
 				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
 			}
 
-			// Функция для удаления пользователя из inbounds (Singbox)
+			// Function to remove user from inbounds (Singbox)
 			removeSingboxUser := func(inbounds []config.SingboxInbound) ([]config.SingboxInbound, bool) {
 				for i, inbound := range inbounds {
 					if inbound.Tag == inboundTag {
@@ -935,34 +935,34 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 				return inbounds, false
 			}
 
-			// Проверка и удаление из config.json
+			// Check and remove from config.json
 			mainUpdated, removedFromMain := removeSingboxUser(mainConfig.Inbounds)
 			if removedFromMain {
 				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("Пользователь %s успешно удалён из config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
 					return
 				}
 				return
 			}
 
-			// Проверка и удаление из .disabled_users
+			// Check and remove from .disabled_users
 			disabledUpdated, removedFromDisabled := removeSingboxUser(disabledConfig.Inbounds)
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("Пользователь %s успешно удалён из .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
 						return
 					}
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Ошибка удаления пустого .disabled_users: %v", err)
+						log.Printf("Error removing empty .disabled_users: %v", err)
 					}
 				}
 				return
 			}
 
-			// Если пользователь не найден
-			http.Error(w, fmt.Sprintf("Пользователь %s не найден в inbound %s ни в config.json, ни в .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
+			// If user not found
+			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
 		}
 	}
 }
@@ -981,48 +981,47 @@ func UpdateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
 }
 
 func SetEnabledHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodPatch {
-            http.Error(w, "Invalid method. Use PATCH", http.StatusMethodNotAllowed)
-            return
-        }
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			http.Error(w, "Invalid method. Use PATCH", http.StatusMethodNotAllowed)
+			return
+		}
 
-        if err := r.ParseForm(); err != nil {
-            http.Error(w, "Error parsing form data", http.StatusBadRequest)
-            return
-        }
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Error parsing form data", http.StatusBadRequest)
+			return
+		}
 
-        userIdentifier := r.FormValue("user")
-        enabledStr := r.FormValue("enabled")
+		userIdentifier := r.FormValue("user")
+		enabledStr := r.FormValue("enabled")
 
-        if userIdentifier == "" {
-            http.Error(w, "user is required", http.StatusBadRequest)
-            return
-        }
+		if userIdentifier == "" {
+			http.Error(w, "user is required", http.StatusBadRequest)
+			return
+		}
 
-        var enabled bool
-        if enabledStr == "" {
-            enabled = true
-            enabledStr = "true"
-        } else {
-            var err error
-            enabled, err = strconv.ParseBool(enabledStr)
-            if err != nil {
-                http.Error(w, "enabled must be true or false", http.StatusBadRequest)
-                return
-            }
-        }
+		var enabled bool
+		if enabledStr == "" {
+			enabled = true
+			enabledStr = "true"
+		} else {
+			var err error
+			enabled, err = strconv.ParseBool(enabledStr)
+			if err != nil {
+				http.Error(w, "enabled must be true or false", http.StatusBadRequest)
+				return
+			}
+		}
 
-        if err := ToggleUserEnabled(userIdentifier, enabled, cfg, memDB); err != nil {
-            log.Printf("Ошибка изменения статуса: %v", err)
-            http.Error(w, "Ошибка обновления статуса", http.StatusInternalServerError)
-            return
-        }
+		if err := ToggleUserEnabled(userIdentifier, enabled, cfg, memDB); err != nil {
+			log.Printf("Error changing status: %v", err)
+			http.Error(w, "Error updating status", http.StatusInternalServerError)
+			return
+		}
 
-        w.WriteHeader(http.StatusOK)
-    }
+		w.WriteHeader(http.StatusOK)
+	}
 }
-
 
 func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
 	mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
@@ -1030,292 +1029,292 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 
 	switch cfg.CoreType {
 	case "xray":
-		// Чтение основного конфига для Xray
-        mainConfigData, err := os.ReadFile(mainConfigPath)
-        if err != nil {
-            return fmt.Errorf("ошибка чтения основного конфига Xray: %v", err)
-        }
-        var mainConfig config.ConfigXray
-        if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-            return fmt.Errorf("ошибка разбора основного конфига Xray: %v", err)
-        }
-
-        // Чтение конфига отключенных пользователей для Xray
-        var disabledConfig config.DisabledUsersConfigXray
-        disabledConfigData, err := os.ReadFile(disabledUsersPath)
-        if err != nil {
-            if os.IsNotExist(err) {
-                disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
-            } else {
-                return fmt.Errorf("ошибка чтения файла отключенных пользователей Xray: %v", err)
-            }
-        } else if len(disabledConfigData) == 0 {
-            disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
-        } else {
-            if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-                return fmt.Errorf("ошибка разбора файла отключенных пользователей Xray: %v", err)
-            }
-        }
-	
-		// Определение источника и цели для Xray
-        sourceInbounds := mainConfig.Inbounds
-        targetInbounds := disabledConfig.Inbounds
-        if enabled {
-            sourceInbounds = disabledConfig.Inbounds
-            targetInbounds = mainConfig.Inbounds
-        }
-
-		// Сбор пользователей для Xray с дедупликацией по email и тегу inbound
-        userMap := make(map[string]config.XrayClient) // Карта тег -> клиент
-        found := false
-        for i, inbound := range sourceInbounds {
-            if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
-                newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
-                clientMap := make(map[string]bool) // Отслеживание уникальных email в inbound
-                for _, client := range inbound.Settings.Clients {
-                    if client.Email == userIdentifier {
-                        if !clientMap[client.Email] {
-                            userMap[inbound.Tag] = client
-                            clientMap[client.Email] = true
-                            found = true
-                        }
-                    } else {
-                        if !clientMap[client.Email] {
-                            newClients = append(newClients, client)
-                            clientMap[client.Email] = true
-                        }
-                    }
-                }
-                sourceInbounds[i].Settings.Clients = newClients
-            }
-        }
-	
-		if !found {
-			return fmt.Errorf("пользователь %s не найден в inbounds с протоколами vless или trojan", userIdentifier)
+		// Read main config for Xray
+		mainConfigData, err := os.ReadFile(mainConfigPath)
+		if err != nil {
+			return fmt.Errorf("error reading Xray main config: %v", err)
+		}
+		var mainConfig config.ConfigXray
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing Xray main config: %v", err)
 		}
 
-		// Проверка дубликатов в целевых inbounds для Xray
-        for _, inbound := range targetInbounds {
-            if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
-                for _, client := range inbound.Settings.Clients {
-                    if client.Email == userIdentifier {
-                        return fmt.Errorf("пользователь %s уже существует в целевом конфиге Xray с тегом %s", userIdentifier, inbound.Tag)
-                    }
-                }
-            }
-        }
+		// Read disabled users config for Xray
+		var disabledConfig config.DisabledUsersConfigXray
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+			} else {
+				return fmt.Errorf("error reading Xray disabled users file: %v", err)
+			}
+		} else if len(disabledConfigData) == 0 {
+			disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+		} else {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing Xray disabled users file: %v", err)
+			}
+		}
 
-		// Добавление пользователей в существующие целевые inbounds для Xray
-        for i, inbound := range targetInbounds {
-            if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
-                if client, exists := userMap[inbound.Tag]; exists {
-                    clientMap := make(map[string]bool)
-                    newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients)+1)
-                    for _, c := range inbound.Settings.Clients {
-                        if !clientMap[c.Email] {
-                            newClients = append(newClients, c)
-                            clientMap[c.Email] = true
-                        }
-                    }
-                    if !clientMap[userIdentifier] {
-                        newClients = append(newClients, client)
-                        log.Printf("Добавлен пользователь %s в inbound с тегом %s для Xray", userIdentifier, inbound.Tag)
-                    }
-                    targetInbounds[i].Settings.Clients = newClients
-                }
-            }
-        }
+		// Determine source and target for Xray
+		sourceInbounds := mainConfig.Inbounds
+		targetInbounds := disabledConfig.Inbounds
+		if enabled {
+			sourceInbounds = disabledConfig.Inbounds
+			targetInbounds = mainConfig.Inbounds
+		}
 
-		// Создание новых inbounds, если их нет в целевом конфиге для Xray
-        for _, mainInbound := range mainConfig.Inbounds {
-            if (mainInbound.Protocol == "vless" || mainInbound.Protocol == "trojan") && !hasInboundXray(targetInbounds, mainInbound.Tag) {
-                if client, exists := userMap[mainInbound.Tag]; exists {
-                    newInbound := mainInbound
-                    newInbound.Settings.Clients = []config.XrayClient{client}
-                    targetInbounds = append(targetInbounds, newInbound)
-                    log.Printf("Создан новый inbound с тегом %s для пользователя %s в Xray", newInbound.Tag, userIdentifier)
-                }
-            }
-        }
+		// Collect users for Xray with deduplication by email and inbound tag
+		userMap := make(map[string]config.XrayClient) // Map tag -> client
+		found := false
+		for i, inbound := range sourceInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
+				clientMap := make(map[string]bool) // Track unique emails in inbound
+				for _, client := range inbound.Settings.Clients {
+					if client.Email == userIdentifier {
+						if !clientMap[client.Email] {
+							userMap[inbound.Tag] = client
+							clientMap[client.Email] = true
+							found = true
+						}
+					} else {
+						if !clientMap[client.Email] {
+							newClients = append(newClients, client)
+							clientMap[client.Email] = true
+						}
+					}
+				}
+				sourceInbounds[i].Settings.Clients = newClients
+			}
+		}
 
-        // Обновление конфигов для Xray
-        if enabled {
-            mainConfig.Inbounds = targetInbounds
-            disabledConfig.Inbounds = sourceInbounds
-        } else {
-            mainConfig.Inbounds = sourceInbounds
-            disabledConfig.Inbounds = targetInbounds
-        }
+		if !found {
+			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols", userIdentifier)
+		}
 
-		// Сохранение основного конфига для Xray
-        mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
-        if err != nil {
-            return fmt.Errorf("ошибка сериализации основного конфига Xray: %v", err)
-        }
-        if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
-            return fmt.Errorf("ошибка записи основного конфига Xray: %v", err)
-        }
+		// Check for duplicates in target inbounds for Xray
+		for _, inbound := range targetInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				for _, client := range inbound.Settings.Clients {
+					if client.Email == userIdentifier {
+						return fmt.Errorf("user %s already exists in target Xray config with tag %s", userIdentifier, inbound.Tag)
+					}
+				}
+			}
+		}
 
-        // Сохранение конфига отключенных пользователей для Xray
-        if len(disabledConfig.Inbounds) > 0 {
-            disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
-            if err != nil {
-                return fmt.Errorf("ошибка сериализации файла отключенных пользователей Xray: %v", err)
-            }
-            if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
-                return fmt.Errorf("ошибка записи файла отключенных пользователей Xray: %v", err)
-            }
-        } else {
-            if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-                log.Printf("Ошибка удаления пустого .disabled_users для Xray: %v", err)
-            }
-        }
+		// Add users to existing target inbounds for Xray
+		for i, inbound := range targetInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				if client, exists := userMap[inbound.Tag]; exists {
+					clientMap := make(map[string]bool)
+					newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients)+1)
+					for _, c := range inbound.Settings.Clients {
+						if !clientMap[c.Email] {
+							newClients = append(newClients, c)
+							clientMap[c.Email] = true
+						}
+					}
+					if !clientMap[userIdentifier] {
+						newClients = append(newClients, client)
+						log.Printf("Added user %s to inbound with tag %s for Xray", userIdentifier, inbound.Tag)
+					}
+					targetInbounds[i].Settings.Clients = newClients
+				}
+			}
+		}
 
-case "singbox":
-        // Чтение основного конфига для Singbox
-        mainConfigData, err := os.ReadFile(mainConfigPath)
-        if err != nil {
-            return fmt.Errorf("ошибка чтения основного конфига Singbox: %v", err)
-        }
-        var mainConfig config.ConfigSingbox
-        if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-            return fmt.Errorf("ошибка разбора основного конфига Singbox: %v", err)
-        }
+		// Create new inbounds if they don’t exist in target config for Xray
+		for _, mainInbound := range mainConfig.Inbounds {
+			if (mainInbound.Protocol == "vless" || mainInbound.Protocol == "trojan") && !hasInboundXray(targetInbounds, mainInbound.Tag) {
+				if client, exists := userMap[mainInbound.Tag]; exists {
+					newInbound := mainInbound
+					newInbound.Settings.Clients = []config.XrayClient{client}
+					targetInbounds = append(targetInbounds, newInbound)
+					log.Printf("Created new inbound with tag %s for user %s in Xray", newInbound.Tag, userIdentifier)
+				}
+			}
+		}
 
-        // Чтение конфига отключенных пользователей для Singbox
-        var disabledConfig config.DisabledUsersConfigSingbox
-        disabledConfigData, err := os.ReadFile(disabledUsersPath)
-        if err != nil {
-            if os.IsNotExist(err) {
-                disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
-            } else {
-                return fmt.Errorf("ошибка чтения файла отключенных пользователей Singbox: %v", err)
-            }
-        } else if len(disabledConfigData) == 0 {
-            disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
-        } else {
-            if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-                return fmt.Errorf("ошибка разбора файла отключенных пользователей Singbox: %v", err)
-            }
-        }
+		// Update configs for Xray
+		if enabled {
+			mainConfig.Inbounds = targetInbounds
+			disabledConfig.Inbounds = sourceInbounds
+		} else {
+			mainConfig.Inbounds = sourceInbounds
+			disabledConfig.Inbounds = targetInbounds
+		}
 
-        // Определение источника и цели для Singbox
-        sourceInbounds := mainConfig.Inbounds
-        targetInbounds := disabledConfig.Inbounds
-        if enabled {
-            sourceInbounds = disabledConfig.Inbounds
-            targetInbounds = mainConfig.Inbounds
-        }
+		// Save main config for Xray
+		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing Xray main config: %v", err)
+		}
+		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
+			return fmt.Errorf("error writing Xray main config: %v", err)
+		}
 
-        // Сбор пользователей для Singbox с дедупликацией по name и тегу inbound
-        userMap := make(map[string]config.SingboxClient) // Карта тег -> пользователь
-        found := false
-        for i, inbound := range sourceInbounds {
-            if inbound.Type == "vless" || inbound.Type == "trojan" {
-                newUsers := make([]config.SingboxClient, 0, len(inbound.Users))
-                userNameMap := make(map[string]bool) // Отслеживание уникальных имен в inbound
-                for _, user := range inbound.Users {
-                    if user.Name == userIdentifier {
-                        if !userNameMap[user.Name] {
-                            userMap[inbound.Tag] = user
-                            userNameMap[user.Name] = true
-                            found = true
-                        }
-                    } else {
-                        if !userNameMap[user.Name] {
-                            newUsers = append(newUsers, user)
-                            userNameMap[user.Name] = true
-                        }
-                    }
-                }
-                sourceInbounds[i].Users = newUsers
-            }
-        }
+		// Save disabled users config for Xray
+		if len(disabledConfig.Inbounds) > 0 {
+			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
+			if err != nil {
+				return fmt.Errorf("error serializing Xray disabled users file: %v", err)
+			}
+			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
+				return fmt.Errorf("error writing Xray disabled users file: %v", err)
+			}
+		} else {
+			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Error removing empty .disabled_users for Xray: %v", err)
+			}
+		}
 
-        if !found {
-            return fmt.Errorf("пользователь %s не найден в inbounds с протоколами vless или trojan для Singbox", userIdentifier)
-        }
+	case "singbox":
+		// Read main config for Singbox
+		mainConfigData, err := os.ReadFile(mainConfigPath)
+		if err != nil {
+			return fmt.Errorf("error reading Singbox main config: %v", err)
+		}
+		var mainConfig config.ConfigSingbox
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing Singbox main config: %v", err)
+		}
 
-        // Проверка дубликатов в целевых inbounds для Singbox
-        for _, inbound := range targetInbounds {
-            if inbound.Type == "vless" || inbound.Type == "trojan" {
-                for _, user := range inbound.Users {
-                    if user.Name == userIdentifier {
-                        return fmt.Errorf("пользователь %s уже существует в целевом конфиге Singbox с тегом %s", userIdentifier, inbound.Tag)
-                    }
-                }
-            }
-        }
+		// Read disabled users config for Singbox
+		var disabledConfig config.DisabledUsersConfigSingbox
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+			} else {
+				return fmt.Errorf("error reading Singbox disabled users file: %v", err)
+			}
+		} else if len(disabledConfigData) == 0 {
+			disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+		} else {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing Singbox disabled users file: %v", err)
+			}
+		}
 
-        // Добавление пользователей в существующие целевые inbounds для Singbox
-        for i, inbound := range targetInbounds {
-            if inbound.Type == "vless" || inbound.Type == "trojan" {
-                if user, exists := userMap[inbound.Tag]; exists {
-                    userNameMap := make(map[string]bool)
-                    newUsers := make([]config.SingboxClient, 0, len(inbound.Users)+1)
-                    for _, u := range inbound.Users {
-                        if !userNameMap[u.Name] {
-                            newUsers = append(newUsers, u)
-                            userNameMap[u.Name] = true
-                        }
-                    }
-                    if !userNameMap[userIdentifier] {
-                        newUsers = append(newUsers, user)
-                        log.Printf("Добавлен пользователь %s в inbound с тегом %s для Singbox", userIdentifier, inbound.Tag)
-                    }
-                    targetInbounds[i].Users = newUsers
-                }
-            }
-        }
+		// Determine source and target for Singbox
+		sourceInbounds := mainConfig.Inbounds
+		targetInbounds := disabledConfig.Inbounds
+		if enabled {
+			sourceInbounds = disabledConfig.Inbounds
+			targetInbounds = mainConfig.Inbounds
+		}
 
-        // Создание новых inbounds, если их нет в целевом конфиге для Singbox
-        for _, mainInbound := range mainConfig.Inbounds {
-            if (mainInbound.Type == "vless" || mainInbound.Type == "trojan") && !hasInboundSingbox(targetInbounds, mainInbound.Tag) {
-                if user, exists := userMap[mainInbound.Tag]; exists {
-                    newInbound := mainInbound
-                    newInbound.Users = []config.SingboxClient{user}
-                    targetInbounds = append(targetInbounds, newInbound)
-                    log.Printf("Создан новый inbound с тегом %s для пользователя %s в Singbox", newInbound.Tag, userIdentifier)
-                }
-            }
-        }
+		// Collect users for Singbox with deduplication by name and inbound tag
+		userMap := make(map[string]config.SingboxClient) // Map tag -> user
+		found := false
+		for i, inbound := range sourceInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				newUsers := make([]config.SingboxClient, 0, len(inbound.Users))
+				userNameMap := make(map[string]bool) // Track unique names in inbound
+				for _, user := range inbound.Users {
+					if user.Name == userIdentifier {
+						if !userNameMap[user.Name] {
+							userMap[inbound.Tag] = user
+							userNameMap[user.Name] = true
+							found = true
+						}
+					} else {
+						if !userNameMap[user.Name] {
+							newUsers = append(newUsers, user)
+							userNameMap[user.Name] = true
+						}
+					}
+				}
+				sourceInbounds[i].Users = newUsers
+			}
+		}
 
-        // Обновление конфигов для Singbox
-        if enabled {
-            mainConfig.Inbounds = targetInbounds
-            disabledConfig.Inbounds = sourceInbounds
-        } else {
-            mainConfig.Inbounds = sourceInbounds
-            disabledConfig.Inbounds = targetInbounds
-        }
+		if !found {
+			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols for Singbox", userIdentifier)
+		}
 
-        // Сохранение основного конфига для Singbox
-        mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
-        if err != nil {
-            return fmt.Errorf("ошибка сериализации основного конфига Singbox: %v", err)
-        }
-        if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
-            return fmt.Errorf("ошибка записи основного конфига Singbox: %v", err)
-        }
+		// Check for duplicates in target inbounds for Singbox
+		for _, inbound := range targetInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				for _, user := range inbound.Users {
+					if user.Name == userIdentifier {
+						return fmt.Errorf("user %s already exists in target Singbox config with tag %s", userIdentifier, inbound.Tag)
+					}
+				}
+			}
+		}
 
-        // Сохранение конфига отключенных пользователей для Singbox
-        if len(disabledConfig.Inbounds) > 0 {
-            disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
-            if err != nil {
-                return fmt.Errorf("ошибка сериализации файла отключенных пользователей Singbox: %v", err)
-            }
-            if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
-                return fmt.Errorf("ошибка записи файла отключенных пользователей Singbox: %v", err)
-            }
-        } else {
-            if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-                log.Printf("Ошибка удаления пустого .disabled_users для Singbox: %v", err)
-            }
-        }
-    }
+		// Add users to existing target inbounds for Singbox
+		for i, inbound := range targetInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				if user, exists := userMap[inbound.Tag]; exists {
+					userNameMap := make(map[string]bool)
+					newUsers := make([]config.SingboxClient, 0, len(inbound.Users)+1)
+					for _, u := range inbound.Users {
+						if !userNameMap[u.Name] {
+							newUsers = append(newUsers, u)
+							userNameMap[u.Name] = true
+						}
+					}
+					if !userNameMap[userIdentifier] {
+						newUsers = append(newUsers, user)
+						log.Printf("Added user %s to inbound with tag %s for Singbox", userIdentifier, inbound.Tag)
+					}
+					targetInbounds[i].Users = newUsers
+				}
+			}
+		}
+
+		// Create new inbounds if they don’t exist in target config for Singbox
+		for _, mainInbound := range mainConfig.Inbounds {
+			if (mainInbound.Type == "vless" || mainInbound.Type == "trojan") && !hasInboundSingbox(targetInbounds, mainInbound.Tag) {
+				if user, exists := userMap[mainInbound.Tag]; exists {
+					newInbound := mainInbound
+					newInbound.Users = []config.SingboxClient{user}
+					targetInbounds = append(targetInbounds, newInbound)
+					log.Printf("Created new inbound with tag %s for user %s in Singbox", newInbound.Tag, userIdentifier)
+				}
+			}
+		}
+
+		// Update configs for Singbox
+		if enabled {
+			mainConfig.Inbounds = targetInbounds
+			disabledConfig.Inbounds = sourceInbounds
+		} else {
+			mainConfig.Inbounds = sourceInbounds
+			disabledConfig.Inbounds = targetInbounds
+		}
+
+		// Save main config for Singbox
+		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing Singbox main config: %v", err)
+		}
+		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
+			return fmt.Errorf("error writing Singbox main config: %v", err)
+		}
+
+		// Save disabled users config for Singbox
+		if len(disabledConfig.Inbounds) > 0 {
+			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
+			if err != nil {
+				return fmt.Errorf("error serializing Singbox disabled users file: %v", err)
+			}
+			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
+				return fmt.Errorf("error writing Singbox disabled users file: %v", err)
+			}
+		} else {
+			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Error removing empty .disabled_users for Singbox: %v", err)
+			}
+		}
+	}
 
 	UpdateEnabledInDB(memDB, userIdentifier, enabled)
-	log.Printf("Пользователь %s успешно перемещен (enabled=%t) в inbounds", userIdentifier, enabled)
+	log.Printf("User %s successfully moved (enabled=%t) to inbounds", userIdentifier, enabled)
 	return nil
 }
 
