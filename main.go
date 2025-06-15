@@ -252,11 +252,11 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
 	data, err := os.ReadFile(mainConfigPath)
 	if err != nil {
-		log.Printf("Ошибка чтения config.json: %v", err)
+		log.Printf("Error reading config.json: %v", err)
 	} else {
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			log.Printf("Ошибка парсинга JSON из config.json: %v", err)
+			log.Printf("Error parsing JSON from config.json: %v", err)
 		} else {
 			extractClients(cfgXray.Inbounds)
 		}
@@ -270,13 +270,13 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 		if len(disabledData) != 0 {
 			var disabledCfg config.DisabledUsersConfigXray
 			if err := json.Unmarshal(disabledData, &disabledCfg); err != nil {
-				log.Printf("Ошибка парсинга JSON из .disabled_users: %v", err)
+				log.Printf("Error parsing JSON from .disabled_users: %v", err)
 			} else {
 				extractClients(disabledCfg.Inbounds)
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		log.Printf("Ошибка чтения .disabled_users: %v", err)
+		log.Printf("Error reading .disabled_users: %v", err)
 	}
 
 	// Преобразование карты в список
@@ -292,13 +292,13 @@ func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
 	configPath := cfg.CoreDir + "config.json"
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		log.Printf("Ошибка чтения config.json для Singbox: %v", err)
+		log.Printf("Error reading config.json for Singbox: %v", err)
 		return nil
 	}
 
 	var cfgSingbox config.ConfigSingbox
 	if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-		log.Printf("Ошибка парсинга JSON для Singbox: %v", err)
+		log.Printf("Error parsing JSON for Singbox: %v", err)
 		return nil
 	}
 
@@ -333,7 +333,7 @@ func addUserToDB(memDB *sql.DB, cfg *config.Config) error {
 	}
 
 	if len(clients) == 0 {
-		log.Printf("Не найдено пользователей для добавления в БД для типа %s", cfg.CoreType)
+		log.Printf("No users found to add to the database for type %s", cfg.CoreType)
 		return nil
 	}
 
@@ -461,7 +461,7 @@ func getApiResponse(cfg *config.Config) (*api.ApiResponse, error) {
 		}
 		xrayResp, err := client.QueryStats(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("ошибка выполнения gRPC-запроса Xray: %w", err)
+			return nil, fmt.Errorf("error executing gRPC request for Xray: %w", err)
 		}
 
 		for _, s := range xrayResp.GetStat() {
@@ -478,7 +478,7 @@ func getApiResponse(cfg *config.Config) (*api.ApiResponse, error) {
 		}
 		singboxResp, err := client.QueryStats(ctx, req)
 		if err != nil {
-			return nil, fmt.Errorf("ошибка выполнения gRPC-запроса Singbox: %w", err)
+			return nil, fmt.Errorf("error executing gRPC request for Singbox: %w", err)
 		}
 		for _, s := range singboxResp.GetStat() {
 			stats = append(stats, api.Stat{
@@ -733,7 +733,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	if queries != "" {
 		_, err := memDB.Exec(queries)
 		if err != nil {
-			log.Fatalf("error executing transaction: %v", err)
+			log.Printf("Error executing transaction: %v", err)
 		}
 	} else {
 		log.Printf("No new data to add or update")
@@ -841,7 +841,7 @@ func updateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
 	_, err := tx.Exec(query, ipStr, email)
 	if err != nil {
-		return fmt.Errorf("ошибка при обновлении данных: %v", err)
+		return fmt.Errorf("error updating data: %v", err)
 	}
 	return nil
 }
@@ -855,7 +855,7 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error
                 ON CONFLICT(email, domain) 
                 DO UPDATE SET count = count + ?`, email, domain, count, count)
 			if err != nil {
-				return fmt.Errorf("ошибка при пакетном обновлении dns_stats: %v", err)
+				return fmt.Errorf("error during batch update of dns_stats: %v", err)
 			}
 		}
 	}
@@ -1205,7 +1205,7 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 		dbMutex.Lock()
 		baseDate := time.Now().UTC()
 		var subEndStr string
-		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE user = ?", userIdentifier).Scan(&subEndStr)
+		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", userIdentifier).Scan(&subEndStr)
 		if err != nil && err != sql.ErrNoRows {
 			dbMutex.Unlock()
 			log.Printf("Error querying database: %v", err)
@@ -1295,7 +1295,7 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	// Получаем все теги из traffic_stats
 	rows, err := memDB.Query("SELECT source FROM traffic_stats")
 	if err != nil {
-		return fmt.Errorf("ошибка получения тегов из traffic_stats: %v", err)
+		return fmt.Errorf("error retrieving tags from traffic_stats: %v", err)
 	}
 	defer rows.Close()
 
@@ -1303,19 +1303,19 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	for rows.Next() {
 		var source string
 		if err := rows.Scan(&source); err != nil {
-			return fmt.Errorf("ошибка чтения строки traffic_stats: %v", err)
+			return fmt.Errorf("error reading row from traffic_stats: %v", err)
 		}
 		trafficSources = append(trafficSources, source)
 	}
 	if err = rows.Err(); err != nil {
-		return fmt.Errorf("ошибка обработки строк traffic_stats: %v", err)
+		return fmt.Errorf("error processing rows from traffic_stats: %v", err)
 	}
 
 	// Извлекаем теги inbounds и outbounds из config.json
 	configPath := filepath.Join(cfg.CoreDir, "config.json")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения config.json: %v", err)
+		return fmt.Errorf("error reading config.json: %v", err)
 	}
 
 	validTags := make(map[string]bool)
@@ -1323,7 +1323,7 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	case "xray":
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			return fmt.Errorf("ошибка парсинга JSON для xray: %v", err)
+			return fmt.Errorf("error parsing JSON for xray: %v", err)
 		}
 		for _, inbound := range cfgXray.Inbounds {
 			validTags[inbound.Tag] = true
@@ -1336,7 +1336,7 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	case "singbox":
 		var cfgSingbox config.ConfigSingbox
 		if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-			return fmt.Errorf("ошибка парсинга JSON для singbox: %v", err)
+			return fmt.Errorf("error parsing JSON for singbox: %v", err)
 		}
 		for _, inbound := range cfgSingbox.Inbounds {
 			validTags[inbound.Tag] = true
@@ -1362,21 +1362,21 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	if len(queries) > 0 {
 		tx, err := memDB.Begin()
 		if err != nil {
-			return fmt.Errorf("ошибка начала транзакции: %v", err)
+			return fmt.Errorf("error starting transaction: %v", err)
 		}
 
 		for _, query := range queries {
 			if _, err := tx.Exec(query); err != nil {
 				tx.Rollback()
-				return fmt.Errorf("ошибка выполнения запроса удаления: %v", err)
+				return fmt.Errorf("error executing delete query: %v", err)
 			}
 		}
 
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("ошибка фиксации транзакции: %v", err)
+			return fmt.Errorf("error committing transaction: %v", err)
 		}
 
-		log.Printf("Удалены несуществующие теги из traffic_stats: %s", strings.Join(invalidTags, ", "))
+		log.Printf("Deleted non-existent tags from traffic_stats: %s", strings.Join(invalidTags, ", "))
 	}
 
 	return nil
@@ -1574,7 +1574,7 @@ func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 			select {
 			case <-ticker.C:
 				if err := cleanInvalidTrafficTags(memDB, cfg); err != nil {
-					log.Printf("Ошибка очистки несуществующих тегов: %v", err)
+					log.Printf("Error cleaning non-existent tags: %v", err)
 				}
 				checkExpiredSubscriptions(memDB, cfg)
 
@@ -1601,10 +1601,10 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLo
 			select {
 			case <-ticker.C:
 				if err := addUserToDB(memDB, cfg); err != nil {
-					log.Printf("Ошибка добавления пользователей: %v", err)
+					log.Printf("Error adding users: %v", err)
 				}
 				if err := delUserFromDB(memDB, cfg); err != nil {
-					log.Printf("Ошибка удаления пользователей: %v", err)
+					log.Printf("Error deleting users: %v", err)
 				}
 
 				apiData, err := getApiResponse(cfg)
