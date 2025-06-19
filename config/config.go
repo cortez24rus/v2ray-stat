@@ -14,6 +14,7 @@ import (
 type Config struct {
 	CoreType              string
 	CoreDir               string
+	CoreConfig            string
 	AccessLogPath         string
 	DatabasePath          string
 	XipLogFile            string
@@ -31,7 +32,8 @@ type Config struct {
 // defaultConfig provides default configuration values.
 var defaultConfig = Config{
 	CoreType:              "xray",
-	CoreDir:               "/usr/local/etc/xray/",
+	CoreDir:			   "/usr/local/etc/xray/",
+	CoreConfig:            "/usr/local/etc/xray/config.json",
 	AccessLogPath:         "/usr/local/etc/xray/access.log",
 	DatabasePath:          "/usr/local/v2ray-stat/data.db",
 	XipLogFile:            "/var/log/v2ray-stat.log",
@@ -88,6 +90,9 @@ func LoadConfig(configFile string) (Config, error) {
 	}
 	if val, ok := configMap["CORE_DIR"]; ok && val != "" {
 		cfg.CoreDir = val
+	}
+	if val, ok := configMap["CORE_СONFIG"]; ok && val != "" {
+		cfg.CoreConfig = val
 	}
 	if val, ok := configMap["ACCESS_LOG_PATH"]; ok && val != "" {
 		cfg.AccessLogPath = val

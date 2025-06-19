@@ -682,7 +682,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
-		configPath := filepath.Join(cfg.CoreDir, "config.json")
+		configPath := cfg.CoreConfig
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			log.Printf("Error reading config.json: %v", err)
@@ -806,7 +806,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
-		configPath := filepath.Join(cfg.CoreDir, "config.json")
+		configPath := cfg.CoreConfig
 		disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
 
 		proxyType := cfg.CoreType
@@ -1024,7 +1024,7 @@ func SetEnabledHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
 }
 
 func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
-	mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
+	mainConfigPath := cfg.CoreConfig
 	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
 
 	switch cfg.CoreType {

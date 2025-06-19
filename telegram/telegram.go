@@ -34,6 +34,6 @@ func SendNotification(token, chatID, message string) error {
 		return fmt.Errorf("failed to send notification, status: %d", resp.StatusCode)
 	}
 
-	log.Printf("Telegram notification sent successfully to chat ID %s", chatID)
+	log.Printf("Telegram notification sent successfully to token %s", token)
 	return nil
 }

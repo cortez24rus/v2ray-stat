@@ -249,8 +249,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	}
 
 	// Чтение и обработка config.json
-	mainConfigPath := filepath.Join(cfg.CoreDir, "config.json")
-	data, err := os.ReadFile(mainConfigPath)
+	data, err := os.ReadFile(cfg.CoreConfig)
 	if err != nil {
 		log.Printf("Error reading config.json: %v", err)
 	} else {
@@ -289,8 +288,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 }
 
 func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
-	configPath := cfg.CoreDir + "config.json"
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(cfg.CoreConfig)
 	if err != nil {
 		log.Printf("Error reading config.json for Singbox: %v", err)
 		return nil
@@ -1312,8 +1310,7 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	}
 
 	// Извлекаем теги inbounds и outbounds из config.json
-	configPath := filepath.Join(cfg.CoreDir, "config.json")
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(cfg.CoreConfig)
 	if err != nil {
 		return fmt.Errorf("error reading config.json: %v", err)
 	}
@@ -1736,6 +1733,7 @@ func main() {
 	monitorUsersAndLogs(ctx, memDB, accessLog, bannedLog, offset, bannedOffset, &cfg, &wg)
 	monitorNetwork(ctx, &wg)
 	monitorStats(ctx, &cfg, &wg)
+	stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
 
 	// Wait for termination signal
 	<-sigChan
