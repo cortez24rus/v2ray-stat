@@ -49,7 +49,7 @@ jobs:
           go build -o build_assets/$BINARY_NAME \
             -trimpath \
             -buildvcs=false \
-            -ldflags="-X main.Version=$VERSION -s -w \
+            -ldflags="-X v2ray-stat/constant.Version=$VERSION -s -w \
             -buildid=" \
             -v .
 

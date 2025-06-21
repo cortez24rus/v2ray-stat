@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"v2ray-stat/config"
+	"v2ray-stat/constant"
 	"v2ray-stat/telegram"
 )
 
@@ -78,7 +79,8 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 	}
 
 	message := fmt.Sprintf(
-		"📡 %s Version: %s\n"+
+		"⚙️ v2ray-stat version: %s\n"+
+		"📡 %s version: %s\n"+
 		"🌐 IPv4: %s\n"+
 		"🌐 IPv6: %s\n"+
 		"⏳ Uptime: %s\n"+
@@ -88,7 +90,7 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 		"🔸 UDP: %d\n"+
 		"🚦 Traffic: %s (↑%s,↓%s)\n"+
 		"ℹ️ Status: %s",
-		strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uploadTraffic, downloadTraffic, serviceStatus,
+		constant.Version, strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uploadTraffic, downloadTraffic, serviceStatus,
 	)
 
 	if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err != nil {

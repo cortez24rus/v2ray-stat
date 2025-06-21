@@ -32,7 +32,7 @@ type Config struct {
 // defaultConfig provides default configuration values.
 var defaultConfig = Config{
 	CoreType:              "xray",
-	CoreDir:			   "/usr/local/etc/xray/",
+	CoreDir:               "/usr/local/etc/xray/",
 	CoreConfig:            "/usr/local/etc/xray/config.json",
 	AccessLogPath:         "/usr/local/etc/xray/access.log",
 	DatabasePath:          "/usr/local/v2ray-stat/data.db",

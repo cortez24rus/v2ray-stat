@@ -22,6 +22,7 @@ import (
 
 	"v2ray-stat/api"
 	"v2ray-stat/config"
+	"v2ray-stat/constant"
 	"v2ray-stat/stats"
 	"v2ray-stat/telegram"
 
@@ -1700,7 +1701,7 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	log.Printf("Starting v2ray-stat application %s, with core: %s", Version, cfg.CoreType)
+	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
 
 	// Инициализация базы данных и логов
 	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase(&cfg)
