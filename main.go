@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,6 +22,8 @@ import (
 	"v2ray-stat/api"
 	"v2ray-stat/config"
 	"v2ray-stat/constant"
+	"v2ray-stat/db"
+	"v2ray-stat/monitor"
 	"v2ray-stat/stats"
 	"v2ray-stat/telegram"
 
@@ -52,7 +53,6 @@ var (
 var (
 	accessLogRegex  = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
-	bannedLogRegex  = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+(BAN|UNBAN)\s+\[Email\] = (\S+)\s+\[IP\] = (\S+)(?:\s+banned for (\d+) seconds\.)?`)
 )
 
 func getDefaultInterface() (string, error) {
@@ -74,370 +74,6 @@ func getDefaultInterface() (string, error) {
 	}
 
 	return "", fmt.Errorf("second active interface not found")
-}
-
-func extractData() string {
-	dirPath := "/var/www/"
-	files, err := os.ReadDir(dirPath)
-	if err != nil {
-		log.Printf("Error reading directory %s: %v", dirPath, err)
-	}
-
-	for _, file := range files {
-		if file.IsDir() {
-			dirName := file.Name()
-			if len(dirName) == 30 {
-				return dirName
-			}
-		}
-	}
-
-	log.Printf("No directory with a 30-character name found in %s", dirPath)
-	return ""
-}
-
-func initDB(db *sql.DB) error {
-	_, err := db.Exec(`
-		PRAGMA cache_size = 10000;
-		PRAGMA journal_mode = MEMORY;
-	`)
-	if err != nil {
-		return fmt.Errorf("error setting PRAGMA: %v", err)
-	}
-
-	query := `
-	CREATE TABLE IF NOT EXISTS clients_stats (
-	    email TEXT PRIMARY KEY,
-	    uuid TEXT,
-	    status TEXT,
-	    enabled TEXT,
-	    created TEXT,
-	    sub_end TEXT DEFAULT '',
-	    renew INTEGER DEFAULT 0,
-	    lim_ip INTEGER DEFAULT 0,
-	    ips TEXT DEFAULT '',
-	    uplink INTEGER DEFAULT 0,
-	    downlink INTEGER DEFAULT 0,
-	    sess_uplink INTEGER DEFAULT 0,
-	    sess_downlink INTEGER DEFAULT 0
-	);
-    CREATE TABLE IF NOT EXISTS traffic_stats (
-		source TEXT PRIMARY KEY,
-		uplink INTEGER DEFAULT 0,
-		downlink INTEGER DEFAULT 0,
-		sess_uplink INTEGER DEFAULT 0,
-		sess_downlink INTEGER DEFAULT 0
-    );
-	CREATE TABLE IF NOT EXISTS dns_stats (
-		email TEXT NOT NULL,
-		count INTEGER DEFAULT 1,
-		domain TEXT NOT NULL,
-		PRIMARY KEY (email, domain)
-	);`
-
-	_, err = db.Exec(query)
-	if err != nil {
-		return fmt.Errorf("error executing SQL query: %v", err)
-	}
-	log.Printf("Database initialized successfully")
-	return nil
-}
-
-func backupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
-	srcConn, err := srcDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("error obtaining connection to source database: %v", err)
-	}
-	defer srcConn.Close()
-
-	destConn, err := memDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("error obtaining connection to target database: %v", err)
-	}
-	defer destConn.Close()
-
-	_, err = destConn.ExecContext(context.Background(), fmt.Sprintf("ATTACH DATABASE '%s' AS src_db", cfg.DatabasePath))
-	if err != nil {
-		return fmt.Errorf("error attaching source database: %v", err)
-	}
-
-	_, err = destConn.ExecContext(context.Background(), `
-        CREATE TABLE IF NOT EXISTS clients_stats (
-            email TEXT PRIMARY KEY,
-            uuid TEXT,
-            status TEXT,
-            enabled TEXT,
-            created TEXT,
-            sub_end TEXT DEFAULT '',
-			renew INTEGER DEFAULT 0,
-            lim_ip INTEGER DEFAULT 0,
-            ips TEXT DEFAULT '',
-            uplink INTEGER DEFAULT 0,
-            downlink INTEGER DEFAULT 0,
-            sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS traffic_stats (
-            source TEXT PRIMARY KEY,
-            sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0,
-            uplink INTEGER DEFAULT 0,
-            downlink INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS dns_stats (
-            email TEXT NOT NULL,
-            count INTEGER DEFAULT 1,
-            domain TEXT NOT NULL,
-            PRIMARY KEY (email, domain)
-        );
-    `)
-
-	if err != nil {
-		return fmt.Errorf("error creating tables in memDB: %v", err)
-	}
-
-	for _, table := range []string{"clients_stats", "traffic_stats", "dns_stats"} {
-		_, err = destConn.ExecContext(context.Background(), fmt.Sprintf(`
-            INSERT OR REPLACE INTO %s SELECT * FROM src_db.%s;
-        `, table, table))
-		if err != nil {
-			return fmt.Errorf("error copying data for table %s: %v", table, err)
-		}
-	}
-
-	_, err = destConn.ExecContext(context.Background(), "DETACH DATABASE src_db;")
-	if err != nil {
-		return fmt.Errorf("error detaching source database: %v", err)
-	}
-
-	return nil
-}
-
-func getFileCreationTime(email string) (string, error) {
-	subJsonPath := extractData()
-	if subJsonPath == "" {
-		return "", fmt.Errorf("failed to extract path from configuration file")
-	}
-
-	subPath := fmt.Sprintf("/var/www/%s/vless_in/%s.json", subJsonPath, email)
-	if _, err := os.Stat(subPath); os.IsNotExist(err) {
-		return time.Now().Format("2006-01-02-15"), nil
-	}
-
-	var stat syscall.Stat_t
-	err := syscall.Stat(subPath, &stat)
-	if err != nil {
-		return "", err
-	}
-
-	creationTime := time.Unix(int64(stat.Ctim.Sec), int64(stat.Ctim.Nsec))
-	formattedTime := creationTime.Format("2006-01-02-15")
-
-	return formattedTime, nil
-}
-
-func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
-	// Карта для уникальных пользователей по email
-	clientMap := make(map[string]config.XrayClient)
-
-	// Функция для извлечения пользователей из inbounds
-	extractClients := func(inbounds []config.XrayInbound) {
-		for _, inbound := range inbounds {
-			for _, client := range inbound.Settings.Clients {
-				clientMap[client.Email] = client
-			}
-		}
-	}
-
-	// Чтение и обработка config.json
-	data, err := os.ReadFile(cfg.CoreConfig)
-	if err != nil {
-		log.Printf("Error reading config.json: %v", err)
-	} else {
-		var cfgXray config.ConfigXray
-		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			log.Printf("Error parsing JSON from config.json: %v", err)
-		} else {
-			extractClients(cfgXray.Inbounds)
-		}
-	}
-
-	// Чтение и обработка .disabled_users
-	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
-	disabledData, err := os.ReadFile(disabledUsersPath)
-	if err == nil {
-		// Проверяем, не пустой ли файл
-		if len(disabledData) != 0 {
-			var disabledCfg config.DisabledUsersConfigXray
-			if err := json.Unmarshal(disabledData, &disabledCfg); err != nil {
-				log.Printf("Error parsing JSON from .disabled_users: %v", err)
-			} else {
-				extractClients(disabledCfg.Inbounds)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		log.Printf("Error reading .disabled_users: %v", err)
-	}
-
-	// Преобразование карты в список
-	var clients []config.XrayClient
-	for _, client := range clientMap {
-		clients = append(clients, client)
-	}
-
-	return clients
-}
-
-func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
-	data, err := os.ReadFile(cfg.CoreConfig)
-	if err != nil {
-		log.Printf("Error reading config.json for Singbox: %v", err)
-		return nil
-	}
-
-	var cfgSingbox config.ConfigSingbox
-	if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-		log.Printf("Error parsing JSON for Singbox: %v", err)
-		return nil
-	}
-
-	var clients []config.XrayClient
-	for _, inbound := range cfgSingbox.Inbounds {
-		if inbound.Tag == "vless-in" || inbound.Tag == "trojan-in" {
-			for _, user := range inbound.Users {
-				client := config.XrayClient{
-					Email: user.Name,
-				}
-				if inbound.Type == "vless" {
-					client.ID = user.UUID
-				} else if inbound.Type == "trojan" {
-					client.Password = user.Password
-					client.ID = user.Password // Используем Password как ID для Trojan
-				}
-				clients = append(clients, client)
-			}
-		}
-	}
-
-	return clients
-}
-
-func addUserToDB(memDB *sql.DB, cfg *config.Config) error {
-	var clients []config.XrayClient
-	switch cfg.CoreType {
-	case "xray":
-		clients = extractUsersXrayServer(cfg)
-	case "singbox":
-		clients = extractUsersSingboxServer(cfg)
-	}
-
-	if len(clients) == 0 {
-		log.Printf("No users found to add to the database for type %s", cfg.CoreType)
-		return nil
-	}
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	tx, err := memDB.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %v", err)
-	}
-
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, status, enabled, created) VALUES (?, ?, ?, ?, ?)")
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error preparing statement: %v", err)
-	}
-	defer stmt.Close()
-
-	var addedEmails []string
-	for _, client := range clients {
-		createdClient, err := getFileCreationTime(client.Email)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to get file creation date for client %s: %v", client.Email, err)
-		}
-
-		result, err := stmt.Exec(client.Email, client.ID, "offline", "true", createdClient)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error inserting client %s: %v", client.Email, err)
-		}
-
-		rowsAffected, err := result.RowsAffected()
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error getting RowsAffected for client %s: %v", client.Email, err)
-		}
-		if rowsAffected > 0 {
-			addedEmails = append(addedEmails, client.Email)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %v", err)
-	}
-
-	if len(addedEmails) > 0 {
-		log.Printf("Users successfully added to database: %s", strings.Join(addedEmails, ", "))
-	}
-
-	return nil
-}
-
-func delUserFromDB(memDB *sql.DB, cfg *config.Config) error {
-	var clients []config.XrayClient
-	switch cfg.CoreType {
-	case "xray":
-		clients = extractUsersXrayServer(cfg)
-	case "singbox":
-		clients = extractUsersSingboxServer(cfg)
-	}
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	rows, err := memDB.Query("SELECT email FROM clients_stats")
-	if err != nil {
-		return fmt.Errorf("error executing query: %v", err)
-	}
-	defer rows.Close()
-
-	var usersDB []string
-	for rows.Next() {
-		var email string
-		if err := rows.Scan(&email); err != nil {
-			return fmt.Errorf("error scanning row: %v", err)
-		}
-		usersDB = append(usersDB, email)
-	}
-
-	var Queries string
-	var deletedEmails []string
-	for _, user := range usersDB {
-		found := false
-		for _, xrayUser := range clients {
-			if user == xrayUser.Email {
-				found = true
-				break
-			}
-		}
-		if !found {
-			Queries += fmt.Sprintf("DELETE FROM clients_stats WHERE email = '%s'; ", user)
-			deletedEmails = append(deletedEmails, user)
-		}
-	}
-
-	if Queries != "" {
-		_, err := memDB.Exec(Queries)
-		if err != nil {
-			return fmt.Errorf("error executing transaction: %v", err)
-		}
-		log.Printf("Users successfully deleted from database: %s", strings.Join(deletedEmails, ", "))
-	}
-
-	return nil
 }
 
 func getApiResponse(cfg *config.Config) (*api.ApiResponse, error) {
@@ -575,10 +211,11 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		source := parts[0]
 		direction := parts[1]
 
-		if direction == "uplink" {
+		switch direction {
+		case "uplink":
 			uplinkValues[source] = diff
 			sessUplinkValues[source] = current
-		} else if direction == "downlink" {
+		case "downlink":
 			downlinkValues[source] = diff
 			sessDownlinkValues[source] = current
 		}
@@ -658,10 +295,11 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		email := parts[0]
 		direction := parts[1]
 
-		if direction == "uplink" {
+		switch direction {
+		case "uplink":
 			clientUplinkValues[email] = diff
 			clientSessUplinkValues[email] = current
-		} else if direction == "downlink" {
+		case "downlink":
 			clientDownlinkValues[email] = diff
 			clientSessDownlinkValues[email] = current
 		}
@@ -675,12 +313,13 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		email := parts[0]
 		direction := parts[1]
 
-		if direction == "uplink" {
+		switch direction {
+		case "uplink":
 			if _, exists := clientSessUplinkValues[email]; !exists {
 				clientSessUplinkValues[email] = 0
 				clientUplinkValues[email] = 0
 			}
-		} else if direction == "downlink" {
+		case "downlink":
 			if _, exists := clientSessDownlinkValues[email]; !exists {
 				clientSessDownlinkValues[email] = 0
 				clientDownlinkValues[email] = 0
@@ -763,86 +402,10 @@ func updateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
 	}
 }
 
-func logExcessIPs(memDB *sql.DB, cfg *config.Config) error {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	logFile, err := os.OpenFile(cfg.XipLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("Error opening log file %s: %v", cfg.XipLogFile, err)
-		return fmt.Errorf("error opening log file: %v", err)
-	}
-	defer logFile.Close()
-
-	currentTime := time.Now().Format("2006/01/02 15:04:05")
-
-	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
-	if err != nil {
-		log.Printf("Error querying clients_stats: %v", err)
-		return fmt.Errorf("error querying database: %v", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var email, ipAddresses string
-		var ipLimit int
-
-		err := rows.Scan(&email, &ipLimit, &ipAddresses)
-		if err != nil {
-			log.Printf("Error scanning row for email %s: %v", email, err)
-			return fmt.Errorf("error scanning row: %v", err)
-		}
-
-		if ipLimit == 0 {
-			continue
-		}
-
-		ipAddresses = strings.Trim(ipAddresses, "[]")
-		ipList := strings.Split(ipAddresses, ",")
-
-		filteredIPList := make([]string, 0, len(ipList))
-		for _, ips := range ipList {
-			ips = strings.TrimSpace(ips)
-			if ips != "" {
-				filteredIPList = append(filteredIPList, ips)
-			}
-		}
-
-		if len(filteredIPList) > ipLimit {
-			excessIPs := filteredIPList[ipLimit:]
-			for _, ips := range excessIPs {
-				logData := fmt.Sprintf("%s [LIMIT_IP] Email = %s || SRC = %s\n", currentTime, email, ips)
-				_, err := logFile.WriteString(logData)
-				if err != nil {
-					log.Printf("Error writing to log file for email %s, IP %s: %v", email, ips, err)
-					return fmt.Errorf("error writing to log file: %v", err)
-				}
-			}
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Printf("Error iterating rows: %v", err)
-		return fmt.Errorf("error iterating rows: %v", err)
-	}
-
-	return nil
-}
-
 type DNSStat struct {
 	Email  string
 	Domain string
 	Count  int
-}
-
-func updateIPInDB(tx *sql.Tx, email string, ipList []string) error {
-	ipStr := strings.Join(ipList, ",")
-	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
-	_, err := tx.Exec(query, ipStr, email)
-	if err != nil {
-		return fmt.Errorf("error updating data: %v", err)
-	}
-	return nil
 }
 
 func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error {
@@ -887,7 +450,7 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 		}
 	}
 
-	if err := updateIPInDB(tx, email, validIPs); err != nil {
+	if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
 		log.Printf("Error updating IP in database: %v", err)
 	}
 
@@ -941,60 +504,6 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	pos, err := file.Seek(0, 1)
 	if err != nil {
 		log.Printf("Error retrieving file position: %v", err)
-		return
-	}
-	*offset = pos
-}
-
-func monitorBannedLog(bannedLog *os.File, offset *int64, cfg *config.Config) {
-	bannedLog.Seek(*offset, 0)
-	scanner := bufio.NewScanner(bannedLog)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		matches := bannedLogRegex.FindStringSubmatch(line)
-		if len(matches) < 5 {
-			log.Printf("Invalid line in ban log: %s", line)
-			continue
-		}
-
-		timestamp := matches[1]
-		action := matches[2]
-		email := matches[3]
-		ip := matches[4]
-		banDuration := "unknown"
-		if len(matches) == 6 && matches[5] != "" {
-			banDuration = matches[5] + " seconds"
-		}
-
-		var message string
-		if action == "BAN" {
-			message = fmt.Sprintf("🚫 IP Banned\n\n"+
-				" Client:   *%s*\n"+
-				" IP:   *%s*\n"+
-				" Time:   *%s*\n"+
-				" Duration:   *%s*", email, ip, timestamp, banDuration)
-		} else {
-			message = fmt.Sprintf("✅ IP Unbanned\n\n"+
-				" Client:   *%s*\n"+
-				" IP:   *%s*\n"+
-				" Time:   *%s*", email, ip, timestamp)
-		}
-
-		if cfg.TelegramBotToken != "" && cfg.TelegramChatId != "" {
-			if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err != nil {
-				log.Printf("Error sending ban notification: %v", err)
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading ban log: %v", err)
-	}
-
-	pos, err := bannedLog.Seek(0, 1)
-	if err != nil {
-		log.Printf("Error retrieving ban log position: %v", err)
 		return
 	}
 	*offset = pos
@@ -1380,88 +889,6 @@ func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func syncToFileDB(memDB *sql.DB, cfg *config.Config) error {
-	_, err := os.Stat(cfg.DatabasePath)
-	fileExists := !os.IsNotExist(err)
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
-	if err != nil {
-		return fmt.Errorf("error opening fileDB: %v", err)
-	}
-	defer fileDB.Close()
-
-	if !fileExists {
-		err = initDB(fileDB)
-		if err != nil {
-			return fmt.Errorf("error initializing fileDB: %v", err)
-		}
-	}
-
-	tables := []string{"clients_stats", "traffic_stats", "dns_stats"}
-
-	tx, err := fileDB.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction in fileDB: %v", err)
-	}
-
-	for _, table := range tables {
-		_, err = tx.Exec(fmt.Sprintf("DELETE FROM %s", table))
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error clearing table %s in fileDB: %v", table, err)
-		}
-
-		rows, err := memDB.Query(fmt.Sprintf("SELECT * FROM %s", table))
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error retrieving data from memDB for table %s: %v", table, err)
-		}
-		defer rows.Close()
-
-		columns, err := rows.Columns()
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error retrieving columns: %v", err)
-		}
-
-		placeholders := strings.Repeat("?,", len(columns)-1) + "?"
-		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ","), placeholders)
-		stmt, err := tx.Prepare(insertQuery)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error preparing query: %v", err)
-		}
-		defer stmt.Close()
-
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-
-		for rows.Next() {
-			if err := rows.Scan(valuePtrs...); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("error scanning row: %v", err)
-			}
-			_, err = stmt.Exec(values...)
-			if err != nil {
-				tx.Rollback()
-				return fmt.Errorf("error inserting row: %v", err)
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %v", err)
-	}
-
-	return nil
-}
-
 // Инициализация базы данных
 func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, err error) {
 	_, err = os.Stat(cfg.DatabasePath)
@@ -1482,19 +909,19 @@ func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.F
 		}
 		defer fileDB.Close()
 
-		if err = initDB(fileDB); err != nil {
+		if err = db.InitDB(fileDB); err != nil {
 			log.Printf("Error initializing database: %v", err)
 			memDB.Close()
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize database: %v", err)
 		}
 
-		if err = backupDB(fileDB, memDB, cfg); err != nil {
+		if err = db.BackupDB(fileDB, memDB, cfg); err != nil {
 			log.Printf("Error copying data to memory: %v", err)
 			memDB.Close()
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to copy data to memory: %v", err)
 		}
 	} else {
-		if err = initDB(memDB); err != nil {
+		if err = db.InitDB(memDB); err != nil {
 			log.Printf("Error initializing in-memory database: %v", err)
 			memDB.Close()
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
@@ -1541,26 +968,6 @@ func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.F
 	return memDB, accessLog, bannedLog, &accessOffset, &banOffset, nil
 }
 
-// Запуск задачи логирования избыточных IP
-func monitorExcessIPs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(1 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := logExcessIPs(memDB, cfg); err != nil {
-					log.Printf("Error logging IPs: %v", err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
 // Запуск задачи синхронизации базы и проверки подписок
 func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
@@ -1576,7 +983,7 @@ func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 				}
 				checkExpiredSubscriptions(memDB, cfg)
 
-				if err := syncToFileDB(memDB, cfg); err != nil {
+				if err := db.SyncToFileDB(memDB, cfg); err != nil {
 					log.Printf("Error synchronizing: %v", err)
 				} else {
 					log.Println("Database synchronized successfully")
@@ -1589,7 +996,7 @@ func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 }
 
 // Запуск задачи мониторинга пользователей и логов
-func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, cfg *config.Config, wg *sync.WaitGroup) {
+func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File, offset *int64, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1598,10 +1005,10 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLo
 		for {
 			select {
 			case <-ticker.C:
-				if err := addUserToDB(memDB, cfg); err != nil {
+				if err := db.AddUserToDB(memDB, cfg); err != nil {
 					log.Printf("Error adding users: %v", err)
 				}
-				if err := delUserFromDB(memDB, cfg); err != nil {
+				if err := db.DelUserFromDB(memDB, cfg); err != nil {
 					log.Printf("Error deleting users: %v", err)
 				}
 
@@ -1613,7 +1020,6 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog, bannedLo
 					updateClientStats(memDB, apiData)
 				}
 				readNewLines(memDB, accessLog, offset, cfg)
-				monitorBannedLog(bannedLog, bannedOffset, cfg)
 			case <-ctx.Done():
 				return
 			}
@@ -1641,55 +1047,6 @@ func initNetworkMonitoring() error {
 
 	log.Printf("Network monitoring initialized for interface %s", iface)
 	return nil
-}
-
-// Запуск мониторинга сети
-func monitorNetwork(ctx context.Context, wg *sync.WaitGroup) {
-	if !*networkEnabled || trafficMonitor == nil {
-		return
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := trafficMonitor.UpdateStats(); err != nil {
-					log.Printf("Error updating network stats for interface %s: %v", trafficMonitor.Iface, err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
-func monitorStats(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
-	if !*statsEnabled {
-		return
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if cfg.TelegramBotToken != "" && cfg.TelegramChatId != "" {
-					stats.CheckServiceStatus(cfg.Services, cfg.TelegramBotToken, cfg.TelegramChatId)
-					stats.CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.DiskThreshold, cfg.MemoryAverageInterval)
-					stats.CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 }
 
 func main() {
@@ -1729,11 +1086,12 @@ func main() {
 	// Start tasks
 	wg.Add(1)
 	go startAPIServer(ctx, memDB, &cfg, &wg)
-	monitorExcessIPs(ctx, memDB, &cfg, &wg)
 	monitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
-	monitorUsersAndLogs(ctx, memDB, accessLog, bannedLog, offset, bannedOffset, &cfg, &wg)
-	monitorNetwork(ctx, &wg)
-	monitorStats(ctx, &cfg, &wg)
+	monitorUsersAndLogs(ctx, memDB, accessLog, offset, &cfg, &wg)
+	monitor.MonitorBannedLogRoutine(ctx, bannedLog, bannedOffset, &cfg, &wg)
+	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
+	stats.MonitorNetworkRoutine(ctx, networkEnabled, trafficMonitor, &wg)
+	stats.MonitorStats(ctx, statsEnabled, &cfg, &wg)
 	stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
 
 	// Wait for termination signal
@@ -1742,7 +1100,7 @@ func main() {
 	cancel()
 
 	// Synchronize database
-	if err := syncToFileDB(memDB, &cfg); err != nil {
+	if err := db.SyncToFileDB(memDB, &cfg); err != nil {
 		log.Printf("Error synchronizing data to fileDB: %v", err)
 	} else {
 		log.Println("Data successfully saved to database file")

@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
+	"v2ray-stat/config"
 	"v2ray-stat/telegram"
 )
 
@@ -355,4 +358,29 @@ func GetStatus(services []string) string {
 	}
 
 	return strings.TrimSpace(status.String())
+}
+
+func MonitorStats(ctx context.Context, statsEnabled *bool, cfg *config.Config, wg *sync.WaitGroup) {
+	if !*statsEnabled {
+		return
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if cfg.TelegramBotToken != "" && cfg.TelegramChatId != "" {
+					CheckServiceStatus(cfg.Services, cfg.TelegramBotToken, cfg.TelegramChatId)
+					CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.DiskThreshold, cfg.MemoryAverageInterval)
+					CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }

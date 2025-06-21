@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -167,4 +168,28 @@ func FormatTraffic(bytes uint64) string {
 		return fmt.Sprintf("%.2f KB", float64(bytes)/kb)
 	}
 	return fmt.Sprintf("%d B", bytes)
+}
+
+// Запуск мониторинга сети
+func MonitorNetworkRoutine(ctx context.Context, networkEnabled *bool, trafficMonitor *TrafficMonitor, wg *sync.WaitGroup) {
+	if !*networkEnabled || trafficMonitor == nil {
+		return
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := trafficMonitor.UpdateStats(); err != nil {
+					log.Printf("Error updating network stats for interface %s: %v", trafficMonitor.Iface, err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }

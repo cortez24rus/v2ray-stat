@@ -7,11 +7,11 @@ import (
 	"log"
 	"net"
 	"os"
-	"sync"
-	"time"
-	"strings"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"v2ray-stat/config"
 	"v2ray-stat/constant"
@@ -80,16 +80,16 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 
 	message := fmt.Sprintf(
 		"⚙️ v2ray-stat version: %s\n"+
-		"📡 %s version: %s\n"+
-		"🌐 IPv4: %s\n"+
-		"🌐 IPv6: %s\n"+
-		"⏳ Uptime: %s\n"+
-		"📈 System Load: %s\n"+
-		"📋 RAM: %s\n"+
-		"🔹 TCP: %d\n"+
-		"🔸 UDP: %d\n"+
-		"🚦 Traffic: %s (↑%s,↓%s)\n"+
-		"ℹ️ Status: %s",
+			"📡 %s version: %s\n"+
+			"🌐 IPv4: %s\n"+
+			"🌐 IPv6: %s\n"+
+			"⏳ Uptime: %s\n"+
+			"📈 System Load: %s\n"+
+			"📋 RAM: %s\n"+
+			"🔹 TCP: %d\n"+
+			"🔸 UDP: %d\n"+
+			"🚦 Traffic: %s (↑%s,↓%s)\n"+
+			"ℹ️ Status: %s",
 		constant.Version, strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uploadTraffic, downloadTraffic, serviceStatus,
 	)
 
