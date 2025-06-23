@@ -91,7 +91,7 @@ func LoadConfig(configFile string) (Config, error) {
 	if val, ok := configMap["CORE_DIR"]; ok && val != "" {
 		cfg.CoreDir = val
 	}
-	if val, ok := configMap["CORE_СONFIG"]; ok && val != "" {
+	if val, ok := configMap["CORE_CONFIG"]; ok && val != "" {
 		cfg.CoreConfig = val
 	}
 	if val, ok := configMap["ACCESS_LOG_PATH"]; ok && val != "" {

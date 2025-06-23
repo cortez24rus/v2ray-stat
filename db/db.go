@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"v2ray-stat/config"
@@ -139,49 +138,6 @@ func BackupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func extractData() string {
-	dirPath := "/var/www/"
-	files, err := os.ReadDir(dirPath)
-	if err != nil {
-		log.Printf("Error reading directory %s: %v", dirPath, err)
-	}
-
-	for _, file := range files {
-		if file.IsDir() {
-			dirName := file.Name()
-			if len(dirName) == 30 {
-				return dirName
-			}
-		}
-	}
-
-	log.Printf("No directory with a 30-character name found in %s", dirPath)
-	return ""
-}
-
-func getFileCreationTime(email string) (string, error) {
-	subJsonPath := extractData()
-	if subJsonPath == "" {
-		return "", fmt.Errorf("failed to extract path from configuration file")
-	}
-
-	subPath := fmt.Sprintf("/var/www/%s/vless_in/%s.json", subJsonPath, email)
-	if _, err := os.Stat(subPath); os.IsNotExist(err) {
-		return time.Now().Format("2006-01-02-15"), nil
-	}
-
-	var stat syscall.Stat_t
-	err := syscall.Stat(subPath, &stat)
-	if err != nil {
-		return "", err
-	}
-
-	creationTime := time.Unix(int64(stat.Ctim.Sec), int64(stat.Ctim.Nsec))
-	formattedTime := creationTime.Format("2006-01-02-15")
-
-	return formattedTime, nil
-}
-
 func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	// Карта для уникальных пользователей по email
 	clientMap := make(map[string]config.XrayClient)
@@ -300,14 +256,9 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 	defer stmt.Close()
 
 	var addedEmails []string
+	currentTime := time.Now().Format("2006-01-02-15")
 	for _, client := range clients {
-		createdClient, err := getFileCreationTime(client.Email)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to get file creation date for client %s: %v", client.Email, err)
-		}
-
-		result, err := stmt.Exec(client.Email, client.ID, "offline", "true", createdClient)
+		result, err := stmt.Exec(client.Email, client.ID, "offline", "true", currentTime)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("error inserting client %s: %v", client.Email, err)

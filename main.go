@@ -239,7 +239,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 			log.Printf("Error executing transaction: %v", err)
 		}
 	} else {
-		log.Printf("No new data to add or update")
+		log.Printf("Statistics not exist yet")
 	}
 
 	previousStats = strings.Join(currentStats, "\n")

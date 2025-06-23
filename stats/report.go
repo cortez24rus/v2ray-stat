@@ -65,7 +65,9 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 	var uplink, downlink uint64
 	err := memDB.QueryRow("SELECT uplink, downlink FROM traffic_stats WHERE source = 'direct'").Scan(&uplink, &downlink)
 	if err != nil {
-		log.Printf("Error querying traffic stats: %v", err)
+		if err != sql.ErrNoRows {
+			log.Printf("Error querying traffic stats: %v", err)
+		}
 		uplink, downlink = 0, 0
 	}
 
@@ -170,7 +172,6 @@ func formatBytes(bytes uint64) string {
 // MonitorDailyReport schedules the daily report to run every 24 hours.
 func MonitorDailyReport(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	if cfg.TelegramBotToken == "" || cfg.TelegramChatId == "" {
-		log.Println("Error: daily report routine not started: TelegramBotToken or TelegramChatId is missing")
 		return
 	}
 
