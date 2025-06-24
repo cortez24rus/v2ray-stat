@@ -14,6 +14,7 @@ import (
 
 	"v2ray-stat/config"
 
+	"github.com/mattn/go-sqlite3"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -68,73 +69,57 @@ func InitDB(db *sql.DB) error {
 	return nil
 }
 
+// BackupDB копирует данные из файловой базы (srcDB) в in-memory базу (memDB) с использованием SQLite Backup API
 func BackupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
+	// Получаем соединения к исходной и целевой базам
 	srcConn, err := srcDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("error obtaining connection to source database: %v", err)
+		return fmt.Errorf("failed to get connection to source database: %v", err)
 	}
 	defer srcConn.Close()
 
-	destConn, err := memDB.Conn(context.Background())
+	memConn, err := memDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("error obtaining connection to target database: %v", err)
+		return fmt.Errorf("failed to get connection to memory database: %v", err)
 	}
-	defer destConn.Close()
+	defer memConn.Close()
 
-	_, err = destConn.ExecContext(context.Background(), fmt.Sprintf("ATTACH DATABASE '%s' AS src_db", cfg.DatabasePath))
+	// Выполняем резервное копирование через Raw доступ к драйверу
+	err = srcConn.Raw(func(srcDriverConn interface{}) error {
+		return memConn.Raw(func(memDriverConn interface{}) error {
+			// Приводим соединения к типу *sqlite3.SQLiteConn
+			srcConnSQLite, ok := srcDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("failed to cast source connection to *sqlite3.SQLiteConn")
+			}
+			memConnSQLite, ok := memDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("failed to cast memory connection to *sqlite3.SQLiteConn")
+			}
+
+			// Инициализируем резервное копирование
+			backup, err := memConnSQLite.Backup("main", srcConnSQLite, "main")
+			if err != nil {
+				return fmt.Errorf("failed to initialize backup: %v", err)
+			}
+			defer backup.Finish()
+
+			// Копируем все страницы за один шаг
+			done, err := backup.Step(-1)
+			if err != nil {
+				return fmt.Errorf("failed to perform backup: %v", err)
+			}
+			if !done {
+				return fmt.Errorf("backup did not complete")
+			}
+			return nil
+		})
+	})
 	if err != nil {
-		return fmt.Errorf("error attaching source database: %v", err)
+		return fmt.Errorf("error during backup: %v", err)
 	}
 
-	_, err = destConn.ExecContext(context.Background(), `
-        CREATE TABLE IF NOT EXISTS clients_stats (
-            email TEXT PRIMARY KEY,
-            uuid TEXT,
-            status TEXT,
-            enabled TEXT,
-            created TEXT,
-            sub_end TEXT DEFAULT '',
-			renew INTEGER DEFAULT 0,
-            lim_ip INTEGER DEFAULT 0,
-            ips TEXT DEFAULT '',
-            uplink INTEGER DEFAULT 0,
-            downlink INTEGER DEFAULT 0,
-            sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS traffic_stats (
-            source TEXT PRIMARY KEY,
-            sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0,
-            uplink INTEGER DEFAULT 0,
-            downlink INTEGER DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS dns_stats (
-            email TEXT NOT NULL,
-            count INTEGER DEFAULT 1,
-            domain TEXT NOT NULL,
-            PRIMARY KEY (email, domain)
-        );
-    `)
-
-	if err != nil {
-		return fmt.Errorf("error creating tables in memDB: %v", err)
-	}
-
-	for _, table := range []string{"clients_stats", "traffic_stats", "dns_stats"} {
-		_, err = destConn.ExecContext(context.Background(), fmt.Sprintf(`
-            INSERT OR REPLACE INTO %s SELECT * FROM src_db.%s;
-        `, table, table))
-		if err != nil {
-			return fmt.Errorf("error copying data for table %s: %v", table, err)
-		}
-	}
-
-	_, err = destConn.ExecContext(context.Background(), "DETACH DATABASE src_db;")
-	if err != nil {
-		return fmt.Errorf("error detaching source database: %v", err)
-	}
-
+	log.Println("Database backup to memory completed successfully")
 	return nil
 }
 
