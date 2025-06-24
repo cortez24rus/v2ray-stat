@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -28,17 +27,11 @@ import (
 	"v2ray-stat/telegram"
 
 	_ "github.com/mattn/go-sqlite3"
-	statsSingbox "github.com/v2ray/v2ray-core/app/stats/command"
-	statsXray "github.com/xtls/xray-core/app/stats/command"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 var (
 	Version             string
 	dnsEnabled          = flag.Bool("dns", false, "Enable DNS statistics collection")
-	statsEnabled        = flag.Bool("stats", false, "Enable general server statistics output")
-	networkEnabled      = flag.Bool("net", false, "Enable network interface statistics collection")
 	uniqueEntries       = make(map[string]map[string]time.Time)
 	uniqueEntriesMutex  sync.Mutex
 	renewNotifiedUsers  = make(map[string]bool)
@@ -47,84 +40,12 @@ var (
 	clientPreviousStats string
 	notifiedUsers       = make(map[string]bool)
 	notifiedMutex       sync.Mutex
-	trafficMonitor      *stats.TrafficMonitor
 )
 
 var (
 	accessLogRegex  = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
 )
-
-func getDefaultInterface() (string, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("failed to get network interfaces: %v", err)
-	}
-
-	count := 0
-	for _, i := range interfaces {
-		if i.Flags&net.FlagUp == 0 {
-			continue
-		}
-
-		count++
-		if count == 2 {
-			return i.Name, nil
-		}
-	}
-
-	return "", fmt.Errorf("second active interface not found")
-}
-
-func getApiResponse(cfg *config.Config) (*api.ApiResponse, error) {
-	clientConn, err := grpc.NewClient("127.0.0.1:9953", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, fmt.Errorf("error connecting to gRPC server: %w", err)
-	}
-	defer clientConn.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var stats []api.Stat
-
-	switch cfg.CoreType {
-	case "xray":
-		client := statsXray.NewStatsServiceClient(clientConn)
-		req := &statsXray.QueryStatsRequest{
-			Pattern: "",
-		}
-		xrayResp, err := client.QueryStats(ctx, req)
-		if err != nil {
-			return nil, fmt.Errorf("error executing gRPC request for Xray: %w", err)
-		}
-
-		for _, s := range xrayResp.GetStat() {
-			stats = append(stats, api.Stat{
-				Name:  s.GetName(),
-				Value: strconv.FormatInt(s.GetValue(), 10),
-			})
-		}
-
-	case "singbox":
-		client := statsSingbox.NewStatsServiceClient(clientConn)
-		req := &statsSingbox.QueryStatsRequest{
-			Pattern: "",
-		}
-		singboxResp, err := client.QueryStats(ctx, req)
-		if err != nil {
-			return nil, fmt.Errorf("error executing gRPC request for Singbox: %w", err)
-		}
-		for _, s := range singboxResp.GetStat() {
-			stats = append(stats, api.Stat{
-				Name:  s.GetName(),
-				Value: strconv.FormatInt(s.GetValue(), 10),
-			})
-		}
-	}
-
-	return &api.ApiResponse{Stat: stats}, nil
-}
 
 func extractProxyTraffic(apiData *api.ApiResponse) []string {
 	var result []string
@@ -752,50 +673,6 @@ func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc
 	}
 }
 
-func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
-	server := &http.Server{
-		Addr:    "127.0.0.1:" + cfg.Port,
-		Handler: nil,
-	}
-
-	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, &dbMutex, statsEnabled, networkEnabled, trafficMonitor, cfg.Services))
-
-	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, cfg))
-
-	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/delete_dns_stats", api.DeleteDNSStatsHandler(memDB, &dbMutex))
-
-	http.HandleFunc("/api/v1/reset_traffic", api.ResetTrafficHandler(trafficMonitor))
-	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
-
-	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/adjust_date", adjustDateOffsetHandler(memDB, cfg))
-	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
-
-	go func() {
-		log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Error starting server: %v", err)
-		}
-	}()
-
-	<-ctx.Done()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Error shutting down server: %v", err)
-	}
-	log.Println("API server stopped successfully")
-
-	wg.Done()
-}
-
 func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
@@ -1012,7 +889,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 					log.Printf("Error deleting users: %v", err)
 				}
 
-				apiData, err := getApiResponse(cfg)
+				apiData, err := api.GetApiResponse(cfg)
 				if err != nil {
 					log.Printf("Error retrieving API data: %v", err)
 				} else {
@@ -1027,26 +904,48 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 	}()
 }
 
-// Инициализация мониторинга сети
-func initNetworkMonitoring() error {
-	if !*networkEnabled {
-		return nil
+func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+	server := &http.Server{
+		Addr:    "127.0.0.1:" + cfg.Port,
+		Handler: nil,
 	}
 
-	iface, err := getDefaultInterface()
-	if err != nil {
-		log.Printf("Error determining default network interface: %v", err)
-		return fmt.Errorf("failed to determine default network interface: %v", err)
-	}
+	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, &dbMutex, cfg.Services, cfg.Features))
 
-	trafficMonitor, err = stats.NewTrafficMonitor(iface)
-	if err != nil {
-		log.Printf("Error initializing traffic monitor for interface %s: %v", iface, err)
-		return fmt.Errorf("failed to initialize traffic monitor for interface %s: %v", iface, err)
-	}
+	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(memDB, &dbMutex, cfg))
+	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(memDB, &dbMutex, cfg))
+	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, cfg))
 
-	log.Printf("Network monitoring initialized for interface %s", iface)
-	return nil
+	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/delete_dns_stats", api.DeleteDNSStatsHandler(memDB, &dbMutex))
+
+	http.HandleFunc("/api/v1/reset_traffic", api.ResetTrafficHandler())
+	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
+
+	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/adjust_date", adjustDateOffsetHandler(memDB, cfg))
+	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
+
+	go func() {
+		log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Error starting server: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Error shutting down server: %v", err)
+	}
+	log.Println("API server stopped successfully")
+
+	wg.Done()
 }
 
 func main() {
@@ -1058,8 +957,6 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
-
 	// Инициализация базы данных и логов
 	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase(&cfg)
 	if err != nil {
@@ -1069,10 +966,7 @@ func main() {
 	defer accessLog.Close()
 	defer bannedLog.Close()
 
-	// Initialize network monitoring
-	if err := initNetworkMonitoring(); err != nil {
-		log.Printf("Failed to initialize network monitoring: %v", err)
-	}
+	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
 
 	// Setup context and signals
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1086,13 +980,23 @@ func main() {
 	// Start tasks
 	wg.Add(1)
 	go startAPIServer(ctx, memDB, &cfg, &wg)
-	monitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
+
 	monitorUsersAndLogs(ctx, memDB, accessLog, offset, &cfg, &wg)
-	monitor.MonitorBannedLogRoutine(ctx, bannedLog, bannedOffset, &cfg, &wg)
+	monitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
-	stats.MonitorNetworkRoutine(ctx, networkEnabled, trafficMonitor, &wg)
-	stats.MonitorStats(ctx, statsEnabled, &cfg, &wg)
-	stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
+	monitor.MonitorBannedLogRoutine(ctx, bannedLog, bannedOffset, &cfg, &wg)
+
+	if cfg.Features["network"] {
+		if err := stats.InitNetworkMonitoring(); err != nil {
+			log.Printf("Failed to initialize network monitoring: %v", err)
+		}
+		stats.MonitorNetworkRoutine(ctx, &wg)
+	}
+
+	if cfg.Features["report"] {
+		stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
+		stats.MonitorStats(ctx, &cfg, &wg)
+	}
 
 	// Wait for termination signal
 	<-sigChan

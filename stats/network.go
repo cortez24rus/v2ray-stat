@@ -171,8 +171,10 @@ func FormatTraffic(bytes uint64) string {
 }
 
 // Запуск мониторинга сети
-func MonitorNetworkRoutine(ctx context.Context, networkEnabled *bool, trafficMonitor *TrafficMonitor, wg *sync.WaitGroup) {
-	if !*networkEnabled || trafficMonitor == nil {
+func MonitorNetworkRoutine(ctx context.Context, wg *sync.WaitGroup) {
+	trafficMonitor := GetTrafficMonitor()
+	if trafficMonitor == nil {
+		log.Println("Network monitoring not initialized, skipping routine")
 		return
 	}
 

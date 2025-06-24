@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -27,6 +29,83 @@ var (
 	diskPercentages   []float64
 	memoryPercentages []float64
 )
+
+// getIPAddresses returns the system's IPv4 and IPv6 addresses.
+func getIPAddresses() (ipv4, ipv6 string) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		log.Printf("Error retrieving IP addresses: %v", err)
+		return "unknown", "unknown"
+	}
+
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+			if ipNet.IP.To4() != nil {
+				ipv4 = ipNet.IP.String()
+			} else if ipNet.IP.To16() != nil {
+				ipv6 = ipNet.IP.String()
+			}
+		}
+	}
+
+	if ipv4 == "" {
+		ipv4 = "none"
+	}
+	if ipv6 == "" {
+		ipv6 = "none"
+	}
+	return ipv4, ipv6
+}
+
+// getConnectionCounts returns the number of TCP and UDP connections (placeholder).
+func getConnectionCounts() (tcpCount, udpCount int) {
+	tcpData, err := os.ReadFile("/proc/net/tcp")
+	if err != nil {
+		log.Printf("Error reading /proc/net/tcp: %v", err)
+	} else {
+		tcpLines := strings.Split(string(tcpData), "\n")
+		tcpCount = len(tcpLines) - 1 // Subtract header line
+	}
+
+	udpData, err := os.ReadFile("/proc/net/udp")
+	if err != nil {
+		log.Printf("Error reading /proc/net/udp: %v", err)
+	} else {
+		udpLines := strings.Split(string(udpData), "\n")
+		udpCount = len(udpLines) - 1 // Subtract header line
+	}
+	return tcpCount, udpCount
+}
+
+func getCoreVersion(cfg *config.Config) string {
+	var binaryName string
+	switch cfg.CoreType {
+	case "xray":
+		binaryName = "xray"
+	case "singbox":
+		binaryName = "sing-box"
+	}
+
+	binaryPath := filepath.Join(cfg.CoreDir, binaryName)
+	cmd := exec.Command(binaryPath, "version")
+	output, err := cmd.Output()
+	if err != nil {
+		log.Printf("Error retrieving %s version: %v", cfg.CoreType, err)
+		return "unknown"
+	}
+
+	lines := strings.Split(string(output), "\n")
+	if len(lines) > 0 {
+		parts := strings.Fields(lines[0])
+		if cfg.CoreType == "xray" && len(parts) >= 2 {
+			return parts[1] // Xray version is the second field (e.g., 25.3.6)
+		} else if cfg.CoreType == "singbox" && len(parts) >= 3 {
+			return parts[2] // Singbox version is the third field (e.g., 1.11.13)
+		}
+	}
+	log.Printf("Error: invalid version output for %s", cfg.CoreType)
+	return "unknown"
+}
 
 // isServiceRunning returns true if a process with the name svc is found in /proc
 func isServiceRunning(svc string) bool {
@@ -61,7 +140,7 @@ func isServiceRunning(svc string) bool {
 }
 
 // CheckServiceStatus checks service statuses and sends a notification if something changes
-func CheckServiceStatus(services []string, token, chatID string) {
+func CheckServiceStatus(token, chatID string, services []string) {
 	statusMutex.Lock()
 	defer statusMutex.Unlock()
 
@@ -360,11 +439,7 @@ func GetStatus(services []string) string {
 	return strings.TrimSpace(status.String())
 }
 
-func MonitorStats(ctx context.Context, statsEnabled *bool, cfg *config.Config, wg *sync.WaitGroup) {
-	if !*statsEnabled {
-		return
-	}
-
+func MonitorStats(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -373,11 +448,9 @@ func MonitorStats(ctx context.Context, statsEnabled *bool, cfg *config.Config, w
 		for {
 			select {
 			case <-ticker.C:
-				if cfg.TelegramBotToken != "" && cfg.TelegramChatId != "" {
-					CheckServiceStatus(cfg.Services, cfg.TelegramBotToken, cfg.TelegramChatId)
-					CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.DiskThreshold, cfg.MemoryAverageInterval)
-					CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
-				}
+				CheckServiceStatus(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.Services)
+				CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.DiskThreshold, cfg.MemoryAverageInterval)
+				CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
 			case <-ctx.Done():
 				return
 			}

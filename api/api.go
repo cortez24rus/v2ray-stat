@@ -102,106 +102,108 @@ func formatSpeed(speed float64) string {
 	return fmt.Sprintf("%.0f bit/s", speed) // < 1 kbit/s
 }
 
-func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, statsEnabled *bool, networkEnabled *bool, trafficMonitor *stats.TrafficMonitor, services []string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+// appendStats is a helper to reduce repetitive WriteString calls
+func appendStats(builder *strings.Builder, content string) {
+	builder.WriteString(content)
+}
 
-		if r.Method != http.MethodGet {
-			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
-			return
+// buildServerStateStats collects server state statistics
+func buildServerStateStats(builder *strings.Builder, services []string) {
+	appendStats(builder, "🖥️  Server State:\n")
+	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Uptime:", stats.GetUptime()))
+	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Load average:", stats.GetLoadAverage()))
+	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Memory:", stats.GetMemoryUsage()))
+	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Disk usage:", stats.GetDiskUsage()))
+	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Status:", stats.GetStatus(services)))
+	appendStats(builder, "\n")
+}
+
+// buildNetworkStats collects network statistics
+func buildNetworkStats(builder *strings.Builder) {
+	trafficMonitor := stats.GetTrafficMonitor()
+	if trafficMonitor != nil {
+		rxSpeed, txSpeed, rxPacketsPerSec, txPacketsPerSec, totalRxBytes, totalTxBytes := trafficMonitor.GetStats()
+		appendStats(builder, fmt.Sprintf("📡 Network (%s):\n", trafficMonitor.Iface))
+		appendStats(builder, fmt.Sprintf("   rx: %s   %.0f p/s    %s\n", formatSpeed(rxSpeed), rxPacketsPerSec, stats.FormatTraffic(totalRxBytes)))
+		appendStats(builder, fmt.Sprintf("   tx: %s   %.0f p/s    %s\n\n", formatSpeed(txSpeed), txPacketsPerSec, stats.FormatTraffic(totalTxBytes)))
+	}
+}
+
+// buildTrafficStats collects traffic statistics from the database
+func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex) {
+	if memDB == nil {
+		log.Printf("Database not initialized in buildTrafficStats")
+		return
+	}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	formatTable := func(rows *sql.Rows, trafficColumns []string) (string, error) {
+		columns, err := rows.Columns()
+		if err != nil {
+			return "", fmt.Errorf("error retrieving column names: %v", err)
 		}
 
-		if memDB == nil {
-			http.Error(w, "Database not initialized", http.StatusInternalServerError)
-			return
+		maxWidths := make([]int, len(columns))
+		for i, col := range columns {
+			maxWidths[i] = len(col)
 		}
 
-		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
-		formatTable := func(rows *sql.Rows, trafficColumns []string) (string, error) {
-			columns, err := rows.Columns()
-			if err != nil {
-				return "", fmt.Errorf("error retrieving column names: %v", err)
+		var data [][]string
+		for rows.Next() {
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range columns {
+				valuePtrs[i] = &values[i]
 			}
 
-			maxWidths := make([]int, len(columns))
-			for i, col := range columns {
-				maxWidths[i] = len(col)
+			if err := rows.Scan(valuePtrs...); err != nil {
+				return "", fmt.Errorf("error scanning row: %v", err)
 			}
 
-			var data [][]string
-			for rows.Next() {
-				values := make([]interface{}, len(columns))
-				valuePtrs := make([]interface{}, len(columns))
-				for i := range columns {
-					valuePtrs[i] = &values[i]
+			row := make([]string, len(columns))
+			for i, val := range values {
+				strVal := fmt.Sprintf("%v", val)
+				row[i] = strVal
+				if len(strVal) > maxWidths[i] {
+					maxWidths[i] = len(strVal)
 				}
-
-				if err := rows.Scan(valuePtrs...); err != nil {
-					return "", fmt.Errorf("error scanning row: %v", err)
-				}
-
-				row := make([]string, len(columns))
-				for i, val := range values {
-					strVal := fmt.Sprintf("%v", val)
-					row[i] = strVal
-					if len(strVal) > maxWidths[i] {
-						maxWidths[i] = len(strVal)
-					}
-				}
-				data = append(data, row)
 			}
-
-			var header strings.Builder
-			for i, col := range columns {
-				header.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, col))
-			}
-			header.WriteString("\n")
-
-			var separator strings.Builder
-			for _, width := range maxWidths {
-				separator.WriteString(strings.Repeat("-", width) + "  ")
-			}
-			separator.WriteString("\n")
-
-			var table strings.Builder
-			table.WriteString(header.String())
-			table.WriteString(separator.String())
-			for _, row := range data {
-				for i, val := range row {
-					if contains(trafficColumns, columns[i]) {
-						table.WriteString(fmt.Sprintf("%*s  ", maxWidths[i], val))
-					} else {
-						table.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, val))
-					}
-				}
-				table.WriteString("\n")
-			}
-
-			return table.String(), nil
+			data = append(data, row)
 		}
 
-		var statsBuilder strings.Builder
-		if *statsEnabled {
-			statsBuilder.WriteString("🖥️  Server State:\n")
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Uptime:", stats.GetUptime()))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Load average:", stats.GetLoadAverage()))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Memory:", stats.GetMemoryUsage()))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Disk usage:", stats.GetDiskUsage()))
-			statsBuilder.WriteString(fmt.Sprintf("%-13s %s\n", "Status:", stats.GetStatus(services)))
-			statsBuilder.WriteString("\n")
+		var header strings.Builder
+		for i, col := range columns {
+			header.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, col))
+		}
+		header.WriteString("\n")
+
+		var separator strings.Builder
+		for _, width := range maxWidths {
+			separator.WriteString(strings.Repeat("-", width) + "  ")
+		}
+		separator.WriteString("\n")
+
+		var table strings.Builder
+		table.WriteString(header.String())
+		table.WriteString(separator.String())
+		for _, row := range data {
+			for i, val := range row {
+				if contains(trafficColumns, columns[i]) {
+					table.WriteString(fmt.Sprintf("%*s  ", maxWidths[i], val))
+				} else {
+					table.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, val))
+				}
+			}
+			table.WriteString("\n")
 		}
 
-		if *networkEnabled {
-			rxSpeed, txSpeed, rxPacketsPerSec, txPacketsPerSec, totalRxBytes, totalTxBytes := trafficMonitor.GetStats()
-			statsBuilder.WriteString(fmt.Sprintf("📡 Network (%s):\n", trafficMonitor.Iface))
-			statsBuilder.WriteString(fmt.Sprintf("   rx: %s   %.0f p/s    %s\n", formatSpeed(rxSpeed), rxPacketsPerSec, stats.FormatTraffic(totalRxBytes)))
-			statsBuilder.WriteString(fmt.Sprintf("   tx: %s   %.0f p/s    %s\n\n", formatSpeed(txSpeed), txPacketsPerSec, stats.FormatTraffic(totalTxBytes)))
-		}
+		return table.String(), nil
+	}
 
-		statsBuilder.WriteString("🌐 Server Statistics:\n")
-		rows, err := memDB.Query(`
+	appendStats(builder, "🌐 Server Statistics:\n")
+	rows, err := memDB.Query(`
             SELECT source AS "Source",
                 CASE
                     WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
@@ -229,78 +231,86 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, statsEnabled *bool, networ
                 END AS "Download"
             FROM traffic_stats;
         `)
-		if err != nil {
-			log.Printf("Error executing SQL query: %v", err)
-			http.Error(w, "Error executing query", http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
+	if err != nil {
+		log.Printf("Error executing server stats query: %v", err)
+		return
+	}
+	defer rows.Close()
 
-		trafficColsServer := []string{"Sess Up", "Sess Down", "Upload", "Download"}
-		serverTable, err := formatTable(rows, trafficColsServer)
-		if err != nil {
-			log.Printf("Error formatting table: %v", err)
-			http.Error(w, "Error processing data", http.StatusInternalServerError)
-			return
-		}
-		statsBuilder.WriteString(serverTable)
+	trafficColsServer := []string{"Sess Up", "Sess Down", "Upload", "Download"}
+	serverTable, _ := formatTable(rows, trafficColsServer)
+	appendStats(builder, serverTable)
 
-		statsBuilder.WriteString("\n📊 Client Statistics:\n")
-		rows, err = memDB.Query(`
-            SELECT email AS "Email",
-                status AS "Status",
-                enabled AS "Enabled",
-                sub_end AS "Sub end",
-                renew AS "Renew",
-                CASE
-                    WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 THEN printf('%.2f KB', sess_uplink / 1024.0)
-                    ELSE printf('%d B', sess_uplink)
-                END AS "Sess Up",
-                CASE
-                    WHEN sess_downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 * 1024 THEN printf('%.2f MB', sess_downlink / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 THEN printf('%.2f KB', sess_downlink / 1024.0)
-                    ELSE printf('%d B', sess_downlink)
-                END AS "Sess Down",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Uplink",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Downlink",
-                lim_ip AS "Lim",
-                ips AS "Ips"
-            FROM clients_stats;
-        `)
-		if err != nil {
-			log.Printf("Error executing SQL query: %v", err)
-			http.Error(w, "Error executing query", http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
+	appendStats(builder, "\n📊 Client Statistics:\n")
+	rows, err = memDB.Query(`
+		SELECT email AS "Email",
+			status AS "Status",
+			enabled AS "Enabled",
+			sub_end AS "Sub end",
+			renew AS "Renew",
+			CASE
+				WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
+				WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
+				WHEN sess_uplink >= 1024 THEN printf('%.2f KB', sess_uplink / 1024.0)
+				ELSE printf('%d B', sess_uplink)
+			END AS "Sess Up",
+			CASE
+				WHEN sess_downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_downlink / 1024.0 / 1024.0 / 1024.0)
+				WHEN sess_downlink >= 1024 * 1024 THEN printf('%.2f MB', sess_downlink / 1024.0 / 1024.0)
+				WHEN sess_downlink >= 1024 THEN printf('%.2f KB', sess_downlink / 1024.0)
+				ELSE printf('%d B', sess_downlink)
+			END AS "Sess Down",
+			CASE
+				WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
+				WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
+				WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
+				ELSE printf('%d B', uplink)
+			END AS "Uplink",
+			CASE
+				WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
+				WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
+				WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
+				ELSE printf('%d B', downlink)
+			END AS "Downlink",
+			lim_ip AS "Lim",
+			ips AS "Ips"
+		FROM clients_stats;
+	`)
+	if err != nil {
+		log.Printf("Error executing client stats query: %v", err)
+		return
+	}
+	defer rows.Close()
 
-		trafficColsClients := []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
-		clientTable, err := formatTable(rows, trafficColsClients)
-		if err != nil {
-			log.Printf("Error formatting table: %v", err)
-			http.Error(w, "Error processing data", http.StatusInternalServerError)
+	trafficColsClients := []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
+	clientTable, _ := formatTable(rows, trafficColsClients)
+	appendStats(builder, clientTable)
+}
+
+func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, features map[string]bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		if r.Method != http.MethodGet {
+			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
 			return
 		}
-		statsBuilder.WriteString(clientTable)
+
+		var statsBuilder strings.Builder
+
+		if features["stats"] {
+			buildServerStateStats(&statsBuilder, services)
+		}
+		if features["network"] {
+			buildNetworkStats(&statsBuilder)
+		}
+		buildTrafficStats(&statsBuilder, memDB, dbMutex)
 
 		fmt.Fprintln(w, statsBuilder.String())
 	}
 }
 
-func ResetTrafficHandler(trafficMonitor *stats.TrafficMonitor) http.HandlerFunc {
+func ResetTrafficHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
@@ -309,6 +319,7 @@ func ResetTrafficHandler(trafficMonitor *stats.TrafficMonitor) http.HandlerFunc 
 			return
 		}
 
+		trafficMonitor := stats.GetTrafficMonitor()
 		if trafficMonitor == nil {
 			http.Error(w, "Traffic monitor not initialized", http.StatusInternalServerError)
 			return
@@ -716,14 +727,13 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 						}
 					}
 					newClient := config.XrayClient{Email: userIdentifier}
-					if protocol == "vless" {
+					switch protocol {
+					case "vless":
 						newClient.ID = credential
-					} else if protocol == "trojan" {
+					case "trojan":
 						newClient.Password = credential
-					} else {
-						http.Error(w, fmt.Sprintf(`{"error": "Unsupported protocol: %s"}`, protocol), http.StatusBadRequest)
-						return
 					}
+
 					cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, newClient)
 					found = true
 					break
@@ -757,14 +767,13 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 						}
 					}
 					newUser := config.SingboxClient{Name: userIdentifier}
-					if protocol == "vless" {
+					switch protocol {
+					case "vless":
 						newUser.UUID = credential
-					} else if protocol == "trojan" {
+					case "trojan":
 						newUser.Password = credential
-					} else {
-						http.Error(w, fmt.Sprintf(`{"error": "Unsupported protocol: %s"}`, protocol), http.StatusBadRequest)
-						return
 					}
+
 					cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, newUser)
 					found = true
 					break

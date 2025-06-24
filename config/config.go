@@ -27,6 +27,7 @@ type Config struct {
 	MemoryAverageInterval int
 	DiskThreshold         int
 	MemoryThreshold       int
+	Features              map[string]bool
 }
 
 // defaultConfig provides default configuration values.
@@ -46,6 +47,7 @@ var defaultConfig = Config{
 	MemoryAverageInterval: 120,
 	DiskThreshold:         0,
 	MemoryThreshold:       0,
+	Features:              make(map[string]bool),
 }
 
 // LoadConfig reads configuration from the specified file and returns a Config struct.
@@ -147,6 +149,12 @@ func LoadConfig(configFile string) (Config, error) {
 			log.Printf("Invalid DISK_THRESHOLD value '%s', using default %d%%", val, cfg.DiskThreshold)
 		} else {
 			cfg.DiskThreshold = dthreshold
+		}
+	}
+	if val, ok := configMap["FEATURES"]; ok && val != "" {
+		features := strings.Split(val, ",")
+		for _, feature := range features {
+			cfg.Features[strings.TrimSpace(feature)] = true
 		}
 	}
 

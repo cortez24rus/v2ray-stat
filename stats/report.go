@@ -5,10 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -17,36 +13,6 @@ import (
 	"v2ray-stat/constant"
 	"v2ray-stat/telegram"
 )
-
-func getCoreVersion(cfg *config.Config) string {
-	var binaryName string
-	switch cfg.CoreType {
-	case "xray":
-		binaryName = "xray"
-	case "singbox":
-		binaryName = "sing-box"
-	}
-
-	binaryPath := filepath.Join(cfg.CoreDir, binaryName)
-	cmd := exec.Command(binaryPath, "version")
-	output, err := cmd.Output()
-	if err != nil {
-		log.Printf("Error retrieving %s version: %v", cfg.CoreType, err)
-		return "unknown"
-	}
-
-	lines := strings.Split(string(output), "\n")
-	if len(lines) > 0 {
-		parts := strings.Fields(lines[0])
-		if cfg.CoreType == "xray" && len(parts) >= 2 {
-			return parts[1] // Xray version is the second field (e.g., 25.3.6)
-		} else if cfg.CoreType == "singbox" && len(parts) >= 3 {
-			return parts[2] // Singbox version is the third field (e.g., 1.11.13)
-		}
-	}
-	log.Printf("Error: invalid version output for %s", cfg.CoreType)
-	return "unknown"
-}
 
 // SendDailyReport sends a daily Telegram notification with system and network stats.
 func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
@@ -102,53 +68,6 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 	}
 }
 
-// getIPAddresses returns the system's IPv4 and IPv6 addresses.
-func getIPAddresses() (ipv4, ipv6 string) {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		log.Printf("Error retrieving IP addresses: %v", err)
-		return "unknown", "unknown"
-	}
-
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
-			if ipNet.IP.To4() != nil {
-				ipv4 = ipNet.IP.String()
-			} else if ipNet.IP.To16() != nil {
-				ipv6 = ipNet.IP.String()
-			}
-		}
-	}
-
-	if ipv4 == "" {
-		ipv4 = "none"
-	}
-	if ipv6 == "" {
-		ipv6 = "none"
-	}
-	return ipv4, ipv6
-}
-
-// getConnectionCounts returns the number of TCP and UDP connections (placeholder).
-func getConnectionCounts() (tcpCount, udpCount int) {
-	tcpData, err := os.ReadFile("/proc/net/tcp")
-	if err != nil {
-		log.Printf("Error reading /proc/net/tcp: %v", err)
-	} else {
-		tcpLines := strings.Split(string(tcpData), "\n")
-		tcpCount = len(tcpLines) - 1 // Subtract header line
-	}
-
-	udpData, err := os.ReadFile("/proc/net/udp")
-	if err != nil {
-		log.Printf("Error reading /proc/net/udp: %v", err)
-	} else {
-		udpLines := strings.Split(string(udpData), "\n")
-		udpCount = len(udpLines) - 1 // Subtract header line
-	}
-	return tcpCount, udpCount
-}
-
 // formatBytes converts bytes to a human-readable format.
 func formatBytes(bytes uint64) string {
 	const (
@@ -171,10 +90,6 @@ func formatBytes(bytes uint64) string {
 
 // MonitorDailyReport schedules the daily report to run every 24 hours.
 func MonitorDailyReport(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
-	if cfg.TelegramBotToken == "" || cfg.TelegramChatId == "" {
-		return
-	}
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
