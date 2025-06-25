@@ -7,9 +7,26 @@ API для управления пользователями и статисти
 `curl -X GET http://127.0.0.1:9952/api/v1/users`
 
 ### Статистика сервера
-- Получить общую статистику сервера (трафик, сессии и т.д.).
 
-`curl -X GET http://127.0.0.1:9952/api/v1/stats`
+- **Описание**: Получение статистики сервера и клиентов (трафик, сессии и дополнительные данные).
+- **Параметры**:
+  - `mode` (необязательный): Задаёт режим вывода статистики. Возможные значения:
+    - `minimal` (по умолчанию): Минимальный набор данных.
+      - Для `traffic_stats`: `Source`, `Upload`, `Download`.
+      - Для `clients_stats`: `Email`, `Status`, `Uplink`, `Downlink`.
+    - `standard`: Расширенный набор с данными сессий.
+      - Для `traffic_stats`: `Source`, `Sess Up`, `Sess Down`, `Upload`, `Download`.
+      - Для `clients_stats`: `Email`, `Status`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`.
+    - `default`: Полный набор данных (аналог `extended`).
+      - Для `traffic_stats`: `Source`, `Sess Up`, `Sess Down`, `Upload`, `Download`.
+      - Для `clients_stats`: `Email`, `Status`, `Enabled`, `Sub end`, `Renew`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Lim`, `Ips`.
+  - Если параметр `mode` не указан, используется режим `minimal`.
+- **Примеры запросов**:
+```bash
+curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=minimal
+curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=standard
+curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=extended
+```
 
 ### Статистика DNS
 - Получить статистику DNS-запросов для пользователя. Параметры: user — user пользователя, count — количество записей.
@@ -40,9 +57,10 @@ API для управления пользователями и статисти
 ### Добавление пользователя
 - Добавить нового пользователя с указанным user, UUID и inboundTag.
 
-`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=vless-in"`
-
-`curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=tAmkh1Sn4NbiJ3pGTF5V9kek1l5LWW&inboundTag=trojan-in"`
+```bash
+curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=123e4567-e89b-12d3-a456-426614174000&inboundTag=vless-in"
+curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=tAmkh1Sn4NbiJ3pGTF5V9kek1l5LWW&inboundTag=trojan-in"
+```
 
 ### Удаление пользователя
 - Удалить пользователя по user и inboundTag.
@@ -52,9 +70,10 @@ API для управления пользователями и статисти
 ### Включение/отключение пользователя
 - Включить или отключить пользователя, указав enabled=true или enabled=false.
 
-`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=true"`
-
-`curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=false"`
+```bash
+curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=true"
+curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=false"
+```
 
 ### Изменение лимита IP
 - Установить лимит на количество IP-адресов для пользователя.
