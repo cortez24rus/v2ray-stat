@@ -198,10 +198,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		if !exists {
 			previous = 0
 		}
-		diff := current - previous
-		if diff < 0 {
-			diff = 0
-		}
+		diff := max(current-previous, 0)
 
 		parts := strings.Fields(key)
 		email := parts[0]
@@ -258,26 +255,17 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 
 		uplinkOnline := sessUplink - previousUplink
 		downlinkOnline := sessDownlink - previousDownlink
-		diffOnline := uplinkOnline + downlinkOnline
+		rate := (uplinkOnline + downlinkOnline) * 8 / 10
 
-		var onlineStatus string
-		switch {
-		case diffOnline < 1:
-			onlineStatus = "offline"
-		case diffOnline < 24576:
-			onlineStatus = "idle"
-		case diffOnline < 18874368:
-			onlineStatus = "online"
-		default:
-			onlineStatus = "overload"
-		}
+		// log.Printf("Traffic for email=%s: sessUplink=%d, previousUplink=%d, sessDownlink=%d, previousDownlink=%d, uplinkOnline=%d, downlinkOnline=%d, rate=%d (raw)",
+		// 	email, sessUplink, previousUplink, sessDownlink, previousDownlink, uplinkOnline, downlinkOnline, rate)
 
-		queries += fmt.Sprintf("INSERT OR REPLACE INTO clients_stats (email, status, uplink, downlink, sess_uplink, sess_downlink) "+
-			"VALUES ('%s', '%s', %d, %d, %d, %d) ON CONFLICT(email) DO UPDATE SET "+
-			"status = '%s', uplink = uplink + %d, downlink = downlink + %d, "+
+		queries += fmt.Sprintf("INSERT OR REPLACE INTO clients_stats (email, rate, uplink, downlink, sess_uplink, sess_downlink) "+
+			"VALUES ('%s', '%d', %d, %d, %d, %d) ON CONFLICT(email) DO UPDATE SET "+
+			"rate = '%d', uplink = uplink + %d, downlink = downlink + %d, "+
 			"sess_uplink = %d, sess_downlink = %d;\n",
-			email, onlineStatus, uplink, downlink, sessUplink, sessDownlink,
-			onlineStatus, uplink, downlink, sessUplink, sessDownlink)
+			email, rate, uplink, downlink, sessUplink, sessDownlink,
+			rate, uplink, downlink, sessUplink, sessDownlink)
 	}
 
 	if queries != "" {
@@ -286,7 +274,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 			log.Printf("Error executing transaction: %v", err)
 		}
 	} else {
-		log.Printf("No new data to add or update")
+		log.Printf("Statistics not exist yet")
 	}
 
 	clientPreviousStats = strings.Join(clientCurrentStats, "\n")

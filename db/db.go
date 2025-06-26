@@ -44,7 +44,7 @@ func InitDB(db *sql.DB) error {
 	CREATE TABLE IF NOT EXISTS clients_stats (
 	    email TEXT PRIMARY KEY,
 	    uuid TEXT,
-	    status TEXT,
+	    rate INTEGER DEFAULT 0,
 	    enabled TEXT,
 	    created TEXT,
 	    sub_end TEXT DEFAULT '',
@@ -242,7 +242,7 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("error starting transaction: %v", err)
 	}
 
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, status, enabled, created) VALUES (?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("error preparing statement: %v", err)
@@ -252,7 +252,7 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 	var addedEmails []string
 	currentTime := time.Now().Format("2006-01-02-15")
 	for _, client := range clients {
-		result, err := stmt.Exec(client.Email, client.ID, "offline", "true", currentTime)
+		result, err := stmt.Exec(client.Email, client.ID, "0", "true", currentTime)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("error inserting client %s: %v", client.Email, err)

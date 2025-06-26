@@ -22,7 +22,7 @@ import (
 type User struct {
 	Email         string `json:"email"`
 	Uuid          string `json:"uuid"`
-	Status        string `json:"status"`
+	Rate          string `json:"rate"`
 	Enabled       string `json:"enabled"`
 	Created       string `json:"created"`
 	Sub_end       string `json:"sub_end"`
@@ -52,7 +52,7 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
-		rows, err := memDB.Query("SELECT email, uuid, status, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
+		rows, err := memDB.Query("SELECT email, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -63,7 +63,7 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		var users []User
 		for rows.Next() {
 			var user User
-			if err := rows.Scan(&user.Email, &user.Uuid, &user.Status, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
+			if err := rows.Scan(&user.Email, &user.Uuid, &user.Rate, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
 				log.Printf("Error reading result: %v", err)
 				http.Error(w, "Error processing data", http.StatusInternalServerError)
 				return
@@ -107,6 +107,29 @@ func formatSpeed(speed float64) string {
 	}
 }
 
+func formatTraffic(value int64, isRate bool) string {
+	if isRate {
+		// Для rate (бит/с)
+		if value >= 1000*1000*1000 {
+			return fmt.Sprintf("%.2f Gbps", float64(value)/1000.0/1000.0/1000.0)
+		} else if value >= 1000*1000 {
+			return fmt.Sprintf("%.2f Mbps", float64(value)/1000.0/1000.0)
+		} else if value >= 1000 {
+			return fmt.Sprintf("%.2f Kbps", float64(value)/1000.0)
+		}
+		return fmt.Sprintf("%d bps", value)
+	}
+	// Для uplink/downlink (байты)
+	if value >= 1024*1024*1024 {
+		return fmt.Sprintf("%.2f GB", float64(value)/1024.0/1024.0/1024.0)
+	} else if value >= 1024*1024 {
+		return fmt.Sprintf("%.2f MB", float64(value)/1024.0/1024.0)
+	} else if value >= 1024 {
+		return fmt.Sprintf("%.2f KB", float64(value)/1024.0)
+	}
+	return fmt.Sprintf("%d B", value)
+}
+
 // appendStats is a helper to reduce repetitive WriteString calls
 func appendStats(builder *strings.Builder, content string) {
 	builder.WriteString(content)
@@ -133,8 +156,6 @@ func buildNetworkStats(builder *strings.Builder) {
 		appendStats(builder, fmt.Sprintf("   tx: %s   %.0f p/s    %s\n\n", formatSpeed(txSpeed), txPacketsPerSec, stats.FormatTraffic(totalTxBytes)))
 	}
 }
-
-// buildTrafficStats collects traffic statistics from the database
 func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, mode string) {
 	if memDB == nil {
 		log.Printf("Database not initialized in buildTrafficStats")
@@ -170,6 +191,14 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 			row := make([]string, len(columns))
 			for i, val := range values {
 				strVal := fmt.Sprintf("%v", val)
+				// Форматируем числовые колонки
+				if contains(trafficColumns, columns[i]) {
+					// Предполагаем, что значения числовые (int64)
+					if numVal, ok := val.(int64); ok {
+						isRate := columns[i] == "Rate"
+						strVal = formatTraffic(numVal, isRate)
+					}
+				}
 				row[i] = strVal
 				if len(strVal) > maxWidths[i] {
 					maxWidths[i] = len(strVal)
@@ -213,51 +242,21 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	switch mode {
 	case "minimal":
 		serverQuery = `
-            SELECT source AS "Source",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Upload",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Download"
+            SELECT source AS "Source", 
+				uplink AS "Upload", 
+				downlink AS "Download"
             FROM traffic_stats;
         `
 		trafficColsServer = []string{"Upload", "Download"}
 	case "standard", "extended":
 		serverQuery = `
-            SELECT source AS "Source",
-                CASE
-                    WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 THEN printf('%.2f KB', sess_uplink / 1024.0)
-                    ELSE printf('%d B', sess_uplink)
-                END AS "Sess Up",
-                CASE
-                    WHEN sess_downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 * 1024 THEN printf('%.2f MB', sess_downlink / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 THEN printf('%.2f KB', sess_downlink / 1024.0)
-                    ELSE printf('%d B', sess_downlink)
-                END AS "Sess Down",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Upload",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Download"
+            SELECT source AS "Source", 
+				sess_uplink AS "Sess Up", 
+				sess_downlink AS "Sess Down",
+				uplink AS "Upload", 
+				downlink AS "Download"
             FROM traffic_stats;
-		`
+        `
 		trafficColsServer = []string{"Sess Up", "Sess Down", "Upload", "Download"}
 	}
 	rows, err := memDB.Query(serverQuery)
@@ -276,90 +275,37 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	switch mode {
 	case "minimal":
 		clientQuery = `
-            SELECT email AS "Email",
-                status AS "Status",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Uplink",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Downlink"
+            SELECT email AS "Email", rate AS "Rate", uplink AS "Uplink", downlink AS "Downlink"
             FROM clients_stats;
         `
-		trafficColsClients = []string{"Uplink", "Downlink"}
+		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "standard":
 		clientQuery = `
-			SELECT email AS "Email",
-                status AS "Status",
-                CASE
-                    WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 THEN printf('%.2f KB', sess_uplink / 1024.0)
-                    ELSE printf('%d B', sess_uplink)
-                END AS "Sess Up",
-                CASE
-                    WHEN sess_downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 * 1024 THEN printf('%.2f MB', sess_downlink / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 THEN printf('%.2f KB', sess_downlink / 1024.0)
-                    ELSE printf('%d B', sess_downlink)
-                END AS "Sess Down",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Uplink",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Downlink"
+            SELECT email AS "Email", 
+				rate AS "Rate", 
+				sess_uplink AS "Sess Up", 
+				sess_downlink AS "Sess Down",
+                uplink AS "Uplink", 
+				downlink AS "Downlink"
             FROM clients_stats;
         `
-		trafficColsClients = []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
+		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "extended":
 		clientQuery = `
-            SELECT email AS "Email",
-                status AS "Status",
-                enabled AS "Enabled",
-                sub_end AS "Sub end",
-                renew AS "Renew",
-                CASE
-                    WHEN sess_uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 * 1024 THEN printf('%.2f MB', sess_uplink / 1024.0 / 1024.0)
-                    WHEN sess_uplink >= 1024 THEN printf('%.2f KB', sess_uplink / 1024.0)
-                    ELSE printf('%d B', sess_uplink)
-                END AS "Sess Up",
-                CASE
-                    WHEN sess_downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', sess_downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 * 1024 THEN printf('%.2f MB', sess_downlink / 1024.0 / 1024.0)
-                    WHEN sess_downlink >= 1024 THEN printf('%.2f KB', sess_downlink / 1024.0)
-                    ELSE printf('%d B', sess_downlink)
-                END AS "Sess Down",
-                CASE
-                    WHEN uplink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', uplink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 * 1024 THEN printf('%.2f MB', uplink / 1024.0 / 1024.0)
-                    WHEN uplink >= 1024 THEN printf('%.2f KB', uplink / 1024.0)
-                    ELSE printf('%d B', uplink)
-                END AS "Uplink",
-                CASE
-                    WHEN downlink >= 1024 * 1024 * 1024 THEN printf('%.2f GB', downlink / 1024.0 / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 * 1024 THEN printf('%.2f MB', downlink / 1024.0 / 1024.0)
-                    WHEN downlink >= 1024 THEN printf('%.2f KB', downlink / 1024.0)
-                    ELSE printf('%d B', downlink)
-                END AS "Downlink",
-                lim_ip AS "Lim",
-                ips AS "Ips"
+            SELECT email AS "Email", 
+				rate AS "Rate", 
+				enabled AS "Enabled", 
+				sub_end AS "Sub end",
+                renew AS "Renew", 
+				sess_uplink AS "Sess Up", 
+				sess_downlink AS "Sess Down",
+                uplink AS "Uplink", 
+				downlink AS "Downlink", 
+				lim_ip AS "Lim", 
+				ips AS "Ips"
             FROM clients_stats;
         `
-		trafficColsClients = []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
+		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
 	rows, err = memDB.Query(clientQuery)
