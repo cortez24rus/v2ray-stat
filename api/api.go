@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,23 +84,25 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 }
 
 func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, item)
 }
 
 func formatSpeed(speed float64) string {
-	if speed >= 1_000_000_000 { // >= 1 Gbit/s (1,000,000,000 bit/s)
+	const (
+		gbit = 1_000_000_000
+		mbit = 1_000_000
+		kbit = 1_000
+	)
+	switch {
+	case speed >= gbit:
 		return fmt.Sprintf("%.2f Gbit/s", speed/1_000_000_000)
-	} else if speed >= 1_000_000 { // >= 1 Mbit/s (1,000,000 bit/s)
+	case speed >= mbit:
 		return fmt.Sprintf("%.2f Mbit/s", speed/1_000_000)
-	} else if speed >= 1_000 { // >= 1 kbit/s (1,000 bit/s)
+	case speed >= kbit:
 		return fmt.Sprintf("%.2f kbit/s", speed/1_000)
+	default:
+		return fmt.Sprintf("%.0f bit/s", speed)
 	}
-	return fmt.Sprintf("%.0f bit/s", speed) // < 1 kbit/s
 }
 
 // appendStats is a helper to reduce repetitive WriteString calls
@@ -109,7 +112,7 @@ func appendStats(builder *strings.Builder, content string) {
 
 // buildServerStateStats collects server state statistics
 func buildServerStateStats(builder *strings.Builder, services []string) {
-	appendStats(builder, "🖥️  Server State:\n")
+	appendStats(builder, "➤  Server State:\n")
 	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Uptime:", stats.GetUptime()))
 	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Load average:", stats.GetLoadAverage()))
 	appendStats(builder, fmt.Sprintf("%-13s %s\n", "Memory:", stats.GetMemoryUsage()))
@@ -123,7 +126,7 @@ func buildNetworkStats(builder *strings.Builder) {
 	trafficMonitor := stats.GetTrafficMonitor()
 	if trafficMonitor != nil {
 		rxSpeed, txSpeed, rxPacketsPerSec, txPacketsPerSec, totalRxBytes, totalTxBytes := trafficMonitor.GetStats()
-		appendStats(builder, fmt.Sprintf("📡 Network (%s):\n", trafficMonitor.Iface))
+		appendStats(builder, fmt.Sprintf("➤  Network (%s):\n", trafficMonitor.Iface))
 		appendStats(builder, fmt.Sprintf("   rx: %s   %.0f p/s    %s\n", formatSpeed(rxSpeed), rxPacketsPerSec, stats.FormatTraffic(totalRxBytes)))
 		appendStats(builder, fmt.Sprintf("   tx: %s   %.0f p/s    %s\n\n", formatSpeed(txSpeed), txPacketsPerSec, stats.FormatTraffic(totalTxBytes)))
 	}
@@ -202,7 +205,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		return table.String(), nil
 	}
 
-	appendStats(builder, "🌐 Server Statistics:\n")
+	appendStats(builder, "➤  Server Statistics:\n")
 	var serverQuery string
 	var trafficColsServer []string
 	switch mode {
@@ -265,7 +268,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	serverTable, _ := formatTable(rows, trafficColsServer)
 	appendStats(builder, serverTable)
 
-	appendStats(builder, "\n📊 Client Statistics:\n")
+	appendStats(builder, "\n➤  Client Statistics:\n")
 	var clientQuery string
 	var trafficColsClients []string
 	switch mode {
