@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -24,27 +22,20 @@ import (
 	"v2ray-stat/db"
 	"v2ray-stat/monitor"
 	"v2ray-stat/stats"
-	"v2ray-stat/telegram"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 var (
-	Version             string
-	dnsEnabled          = flag.Bool("dns", false, "Enable DNS statistics collection")
 	uniqueEntries       = make(map[string]map[string]time.Time)
 	uniqueEntriesMutex  sync.Mutex
-	renewNotifiedUsers  = make(map[string]bool)
 	dbMutex             sync.Mutex
 	previousStats       string
 	clientPreviousStats string
-	notifiedUsers       = make(map[string]bool)
-	notifiedMutex       sync.Mutex
 )
 
 var (
-	accessLogRegex  = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
-	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
+	accessLogRegex = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
 )
 
 func extractProxyTraffic(apiData *api.ApiResponse) []string {
@@ -310,19 +301,6 @@ func stringToInt(s string) int {
 	return result
 }
 
-func updateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
-	enabledStr := "false"
-	if enabled {
-		enabledStr = "true"
-	}
-	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE email = ?", enabledStr, email)
-	if err != nil {
-		log.Printf("Error updating database for email %s: %v", email, err)
-	} else {
-		log.Printf("Updated enabled status for %s to %s", email, enabledStr)
-	}
-}
-
 type DNSStat struct {
 	Email  string
 	Domain string
@@ -375,12 +353,10 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 		log.Printf("Error updating IP in database: %v", err)
 	}
 
-	if *dnsEnabled {
-		if dnsStats[email] == nil {
-			dnsStats[email] = make(map[string]int)
-		}
-		dnsStats[email][domain]++
+	if dnsStats[email] == nil {
+		dnsStats[email] = make(map[string]int)
 	}
+	dnsStats[email][domain]++
 }
 
 func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
@@ -408,12 +384,10 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 		return
 	}
 
-	if *dnsEnabled && len(dnsStats) > 0 {
-		if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
-			log.Printf("Error during batch update of DNS queries: %v", err)
-			tx.Rollback()
-			return
-		}
+	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
+		log.Printf("Error during batch update of DNS queries: %v", err)
+		tx.Rollback()
+		return
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -430,344 +404,8 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	*offset = pos
 }
 
-func formatDate(subEnd string) string {
-	t, err := time.ParseInLocation("2006-01-02-15", subEnd, time.Local)
-	if err != nil {
-		log.Printf("Error parsing date %s: %v", subEnd, err)
-		return subEnd
-	}
-
-	_, offsetSeconds := t.Zone()
-	offsetHours := offsetSeconds / 3600
-
-	return fmt.Sprintf("%s UTC%+d", t.Format("2006.01.02 15:04"), offsetHours)
-}
-
-func checkExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	now := time.Now()
-
-	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
-	if err != nil {
-		log.Printf("Error querying database: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	type subscription struct {
-		Email   string
-		SubEnd  string
-		UUID    string
-		Enabled string
-		Renew   int
-	}
-	var subscriptions []subscription
-
-	for rows.Next() {
-		var s subscription
-		err := rows.Scan(&s.Email, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
-		if err != nil {
-			log.Printf("Error scanning row: %v", err)
-			continue
-		}
-		subscriptions = append(subscriptions, s)
-	}
-
-	if err = rows.Err(); err != nil {
-		log.Printf("Error processing rows: %v", err)
-		return
-	}
-
-	for _, s := range subscriptions {
-		if s.SubEnd != "" {
-			subEnd, err := time.Parse("2006-01-02-15", s.SubEnd)
-			if err != nil {
-				log.Printf("Error parsing date for %s: %v", s.Email, err)
-				continue
-			}
-
-			if subEnd.Before(now) {
-				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatId != ""
-
-				notifiedMutex.Lock()
-				if canSendNotifications && !notifiedUsers[s.Email] {
-					formattedDate := formatDate(s.SubEnd)
-					message := fmt.Sprintf("❌ Subscription expired\n\n"+
-						"Client:   *%s*\n"+
-						"Expiration date:   *%s*", s.Email, formattedDate)
-					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
-						notifiedUsers[s.Email] = true
-					}
-				}
-				notifiedMutex.Unlock()
-
-				if s.Renew >= 1 {
-					offset := fmt.Sprintf("%d", s.Renew)
-					err = adjustDateOffset(memDB, s.Email, offset, now)
-					if err != nil {
-						log.Printf("Error renewing subscription for %s: %v", s.Email, err)
-						continue
-					}
-					log.Printf("Auto-renewed subscription for user %s for %d days", s.Email, s.Renew)
-
-					if canSendNotifications {
-						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
-							"Client:   *%s*\n"+
-							"Renewed for:   *%d days*", s.Email, s.Renew)
-						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
-							renewNotifiedUsers[s.Email] = true
-						}
-					}
-
-					notifiedMutex.Lock()
-					notifiedUsers[s.Email] = false
-					renewNotifiedUsers[s.Email] = false
-					notifiedMutex.Unlock()
-
-					if s.Enabled == "false" {
-						err = api.ToggleUserEnabled(s.Email, true, cfg, memDB)
-						if err != nil {
-							log.Printf("Error enabling user %s: %v", s.Email, err)
-							continue
-						}
-						updateEnabledInDB(memDB, s.Email, true)
-						log.Printf("User %s enabled", s.Email)
-					}
-				} else if s.Enabled == "true" {
-					err = api.ToggleUserEnabled(s.Email, false, cfg, memDB)
-					if err != nil {
-						log.Printf("Error disabling user %s: %v", s.Email, err)
-					} else {
-						log.Printf("User %s disabled", s.Email)
-					}
-					updateEnabledInDB(memDB, s.Email, false)
-				}
-			} else {
-				if s.Enabled == "false" {
-					err = api.ToggleUserEnabled(s.Email, true, cfg, memDB)
-					if err != nil {
-						log.Printf("Error enabling user %s: %v", s.Email, err)
-						continue
-					}
-					updateEnabledInDB(memDB, s.Email, true)
-					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.Email, s.SubEnd)
-				}
-			}
-		}
-	}
-}
-
-func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
-	matches := dateOffsetRegex.FindStringSubmatch(offset)
-	if matches == nil {
-		return time.Time{}, fmt.Errorf("invalid format: %s", offset)
-	}
-
-	sign := matches[1]
-	daysStr := matches[2]
-	hoursStr := matches[3]
-
-	days, _ := strconv.Atoi(daysStr)
-	hours := 0
-	if hoursStr != "" {
-		hours, _ = strconv.Atoi(hoursStr)
-	}
-
-	if sign == "-" {
-		days = -days
-		hours = -hours
-	}
-
-	newDate := baseDate.AddDate(0, 0, days).Add(time.Duration(hours) * time.Hour)
-	return newDate, nil
-}
-
-func adjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) error {
-	offset = strings.TrimSpace(offset)
-
-	if offset == "0" {
-		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE email = ?", email)
-		if err != nil {
-			return fmt.Errorf("error updating database: %v", err)
-		}
-		log.Printf("Unlimited time restriction set for email %s", email)
-		return nil
-	}
-
-	newDate, err := parseAndAdjustDate(offset, baseDate)
-	if err != nil {
-		return fmt.Errorf("invalid offset format: %v", err)
-	}
-
-	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE email = ?", newDate.Format("2006-01-02-15"), email)
-	if err != nil {
-		return fmt.Errorf("error updating database: %v", err)
-	}
-
-	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s)", email, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset)
-	return nil
-}
-
-func adjustDateOffsetHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
-			http.Error(w, "Invalid method. Use PATCH", http.StatusMethodNotAllowed)
-			return
-		}
-		if memDB == nil {
-			http.Error(w, "Database not initialized", http.StatusInternalServerError)
-			return
-		}
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "Error parsing form data", http.StatusBadRequest)
-			return
-		}
-		userIdentifier := r.FormValue("user")
-		sub_end := r.FormValue("sub_end")
-		if userIdentifier == "" || sub_end == "" {
-			http.Error(w, "user and sub_end are required", http.StatusBadRequest)
-			return
-		}
-
-		dbMutex.Lock()
-		baseDate := time.Now().UTC()
-		var subEndStr string
-		err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", userIdentifier).Scan(&subEndStr)
-		if err != nil && err != sql.ErrNoRows {
-			dbMutex.Unlock()
-			log.Printf("Error querying database: %v", err)
-			http.Error(w, "Error querying database", http.StatusInternalServerError)
-			return
-		}
-		if subEndStr != "" {
-			baseDate, err = time.Parse("2006-01-02-15", subEndStr)
-			if err != nil {
-				dbMutex.Unlock()
-				log.Printf("Error parsing sub_end: %v", err)
-				http.Error(w, "Error parsing sub_end", http.StatusInternalServerError)
-				return
-			}
-		}
-		err = adjustDateOffset(memDB, userIdentifier, sub_end, baseDate)
-		dbMutex.Unlock()
-
-		if err != nil {
-			log.Printf("Error updating date: %v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		go func() {
-			checkExpiredSubscriptions(memDB, cfg)
-		}()
-
-		w.WriteHeader(http.StatusOK)
-		_, err = fmt.Fprintf(w, "Subscription date for %s updated with sub_end %s\n", userIdentifier, sub_end)
-		if err != nil {
-			log.Printf("Error writing response for user %s: %v", userIdentifier, err)
-			http.Error(w, "Error sending response", http.StatusInternalServerError)
-			return
-		}
-	}
-}
-
-func cleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	// Получаем все теги из traffic_stats
-	rows, err := memDB.Query("SELECT source FROM traffic_stats")
-	if err != nil {
-		return fmt.Errorf("error retrieving tags from traffic_stats: %v", err)
-	}
-	defer rows.Close()
-
-	var trafficSources []string
-	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
-			return fmt.Errorf("error reading row from traffic_stats: %v", err)
-		}
-		trafficSources = append(trafficSources, source)
-	}
-	if err = rows.Err(); err != nil {
-		return fmt.Errorf("error processing rows from traffic_stats: %v", err)
-	}
-
-	// Извлекаем теги inbounds и outbounds из config.json
-	data, err := os.ReadFile(cfg.CoreConfig)
-	if err != nil {
-		return fmt.Errorf("error reading config.json: %v", err)
-	}
-
-	validTags := make(map[string]bool)
-	switch cfg.CoreType {
-	case "xray":
-		var cfgXray config.ConfigXray
-		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			return fmt.Errorf("error parsing JSON for xray: %v", err)
-		}
-		for _, inbound := range cfgXray.Inbounds {
-			validTags[inbound.Tag] = true
-		}
-		for _, outbound := range cfgXray.Outbounds {
-			if tag, ok := outbound["tag"].(string); ok {
-				validTags[tag] = true
-			}
-		}
-	case "singbox":
-		var cfgSingbox config.ConfigSingbox
-		if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-			return fmt.Errorf("error parsing JSON for singbox: %v", err)
-		}
-		for _, inbound := range cfgSingbox.Inbounds {
-			validTags[inbound.Tag] = true
-		}
-		for _, outbound := range cfgSingbox.Outbounds {
-			if tag, ok := outbound["tag"].(string); ok {
-				validTags[tag] = true
-			}
-		}
-	}
-
-	// Собираем теги для удаления
-	var invalidTags []string
-	var queries []string
-	for _, source := range trafficSources {
-		if !validTags[source] {
-			queries = append(queries, fmt.Sprintf("DELETE FROM traffic_stats WHERE source = '%s'", source))
-			invalidTags = append(invalidTags, source)
-		}
-	}
-
-	// Выполняем удаление
-	if len(queries) > 0 {
-		tx, err := memDB.Begin()
-		if err != nil {
-			return fmt.Errorf("error starting transaction: %v", err)
-		}
-
-		for _, query := range queries {
-			if _, err := tx.Exec(query); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("error executing delete query: %v", err)
-			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("error committing transaction: %v", err)
-		}
-
-		log.Printf("Deleted non-existent tags from traffic_stats: %s", strings.Join(invalidTags, ", "))
-	}
-
-	return nil
-}
-
 // Инициализация базы данных
-func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, err error) {
+func initFile(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, err error) {
 	_, err = os.Stat(cfg.DatabasePath)
 	fileExists := !os.IsNotExist(err)
 
@@ -845,33 +483,6 @@ func initDatabase(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.F
 	return memDB, accessLog, bannedLog, &accessOffset, &banOffset, nil
 }
 
-// Запуск задачи синхронизации базы и проверки подписок
-func monitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := cleanInvalidTrafficTags(memDB, cfg); err != nil {
-					log.Printf("Error cleaning non-existent tags: %v", err)
-				}
-				checkExpiredSubscriptions(memDB, cfg)
-
-				if err := db.SyncToFileDB(memDB, cfg); err != nil {
-					log.Printf("Error synchronizing: %v", err)
-				} else {
-					log.Println("Database synchronized successfully")
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
 // Запуск задачи мониторинга пользователей и логов
 func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File, offset *int64, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
@@ -925,7 +536,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
 
 	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/adjust_date", adjustDateOffsetHandler(memDB, cfg))
+	http.HandleFunc("/api/v1/adjust_date", api.AdjustDateOffsetHandler(memDB, &dbMutex, cfg))
 	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
 
 	go func() {
@@ -949,8 +560,6 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 }
 
 func main() {
-	flag.Parse()
-
 	// Load configuration
 	cfg, err := config.LoadConfig(".env")
 	if err != nil {
@@ -958,7 +567,7 @@ func main() {
 	}
 
 	// Инициализация базы данных и логов
-	memDB, accessLog, bannedLog, offset, bannedOffset, err := initDatabase(&cfg)
+	memDB, accessLog, bannedLog, offset, bannedOffset, err := initFile(&cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -982,7 +591,7 @@ func main() {
 	go startAPIServer(ctx, memDB, &cfg, &wg)
 
 	monitorUsersAndLogs(ctx, memDB, accessLog, offset, &cfg, &wg)
-	monitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
+	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
 	monitor.MonitorBannedLogRoutine(ctx, bannedLog, bannedOffset, &cfg, &wg)
 

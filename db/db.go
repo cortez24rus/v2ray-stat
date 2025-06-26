@@ -8,23 +8,32 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"v2ray-stat/config"
+	"v2ray-stat/telegram"
 
-	"github.com/mattn/go-sqlite3"
-	_ "github.com/mattn/go-sqlite3"
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 var (
-	dbMutex sync.Mutex
+	dbMutex            sync.Mutex
+	notifiedMutex      sync.Mutex
+	notifiedUsers      = make(map[string]bool)
+	renewNotifiedUsers = make(map[string]bool)
+)
+
+var (
+	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
 )
 
 func InitDB(db *sql.DB) error {
 	_, err := db.Exec(`
-		PRAGMA cache_size = 10000;
+		PRAGMA cache_size = 2000;
 		PRAGMA journal_mode = MEMORY;
 	`)
 	if err != nil {
@@ -335,83 +344,723 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
-	_, err := os.Stat(cfg.DatabasePath)
-	fileExists := !os.IsNotExist(err)
+	start := time.Now() // Замер времени выполнения
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
+	// Открытие или создание файла базы данных SQLite (файл создаётся автоматически, если не существует)
 	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
 	if err != nil {
-		return fmt.Errorf("error opening fileDB: %v", err)
+		return fmt.Errorf("failed to open file database at %s: %v", cfg.DatabasePath, err)
 	}
 	defer fileDB.Close()
 
-	if !fileExists {
-		err = InitDB(fileDB)
-		if err != nil {
-			return fmt.Errorf("error initializing fileDB: %v", err)
+	// Проверка необходимости инициализации базы данных
+	var tableCount int
+	err = fileDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").Scan(&tableCount)
+	if err != nil {
+		return fmt.Errorf("failed to check database schema: %v", err)
+	}
+	if tableCount == 0 {
+		if err := InitDB(fileDB); err != nil {
+			return fmt.Errorf("failed to initialize file database: %v", err)
 		}
 	}
 
-	tables := []string{"clients_stats", "traffic_stats", "dns_stats"}
-
+	// Начало транзакции для атомарного обновления данных
 	tx, err := fileDB.Begin()
 	if err != nil {
-		return fmt.Errorf("error starting transaction in fileDB: %v", err)
+		return fmt.Errorf("failed to start transaction: %v", err)
 	}
 
+	// Список таблиц для синхронизации
+	tables := []string{"clients_stats", "traffic_stats", "dns_stats"}
 	for _, table := range tables {
+		// Очистка таблицы в fileDB
 		_, err = tx.Exec(fmt.Sprintf("DELETE FROM %s", table))
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("error clearing table %s in fileDB: %v", table, err)
+			return fmt.Errorf("failed to clear table %s: %v", table, err)
 		}
 
+		// Выборка всех данных из memDB
 		rows, err := memDB.Query(fmt.Sprintf("SELECT * FROM %s", table))
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("error retrieving data from memDB for table %s: %v", table, err)
+			return fmt.Errorf("failed to query table %s from memDB: %v", table, err)
 		}
 		defer rows.Close()
 
+		// Получение структуры таблицы
 		columns, err := rows.Columns()
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("error retrieving columns: %v", err)
+			return fmt.Errorf("failed to get columns for table %s: %v", table, err)
 		}
 
-		placeholders := strings.Repeat("?,", len(columns)-1) + "?"
-		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", table, strings.Join(columns, ","), placeholders)
+		// Подготовка параметризованного запроса для вставки
+		placeholders := make([]string, len(columns))
+		for i := range placeholders {
+			placeholders[i] = "?"
+		}
+		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+			table, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 		stmt, err := tx.Prepare(insertQuery)
 		if err != nil {
 			tx.Rollback()
-			return fmt.Errorf("error preparing query: %v", err)
+			return fmt.Errorf("failed to prepare insert statement for table %s: %v", table, err)
 		}
 		defer stmt.Close()
 
+		// Вставка данных построчно
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
-
 		for rows.Next() {
 			if err := rows.Scan(valuePtrs...); err != nil {
 				tx.Rollback()
-				return fmt.Errorf("error scanning row: %v", err)
+				return fmt.Errorf("failed to scan row from table %s: %v", table, err)
 			}
 			_, err = stmt.Exec(values...)
 			if err != nil {
 				tx.Rollback()
-				return fmt.Errorf("error inserting row: %v", err)
+				return fmt.Errorf("failed to insert row into table %s: %v", table, err)
 			}
 		}
 	}
 
+	// Фиксация транзакции
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %v", err)
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	// Логирование времени выполнения
+	log.Printf("SyncToFileDB completed in %v", time.Since(start))
+	return nil
+}
+
+func UpdateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
+	enabledStr := "false"
+	if enabled {
+		enabledStr = "true"
+	}
+	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE email = ?", enabledStr, email)
+	if err != nil {
+		log.Printf("Error updating database for email %s: %v", email, err)
+	} else {
+		log.Printf("Updated enabled status for %s to %s", email, enabledStr)
+	}
+}
+
+func formatDate(subEnd string) string {
+	t, err := time.ParseInLocation("2006-01-02-15", subEnd, time.Local)
+	if err != nil {
+		log.Printf("Error parsing date %s: %v", subEnd, err)
+		return subEnd
+	}
+
+	_, offsetSeconds := t.Zone()
+	offsetHours := offsetSeconds / 3600
+
+	return fmt.Sprintf("%s UTC%+d", t.Format("2006.01.02 15:04"), offsetHours)
+}
+
+func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
+	matches := dateOffsetRegex.FindStringSubmatch(offset)
+	if matches == nil {
+		return time.Time{}, fmt.Errorf("invalid format: %s", offset)
+	}
+
+	sign := matches[1]
+	daysStr := matches[2]
+	hoursStr := matches[3]
+
+	days, _ := strconv.Atoi(daysStr)
+	hours := 0
+	if hoursStr != "" {
+		hours, _ = strconv.Atoi(hoursStr)
+	}
+
+	if sign == "-" {
+		days = -days
+		hours = -hours
+	}
+
+	newDate := baseDate.AddDate(0, 0, days).Add(time.Duration(hours) * time.Hour)
+	return newDate, nil
+}
+
+func AdjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) error {
+	offset = strings.TrimSpace(offset)
+
+	if offset == "0" {
+		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE email = ?", email)
+		if err != nil {
+			return fmt.Errorf("error updating database: %v", err)
+		}
+		log.Printf("Unlimited time restriction set for email %s", email)
+		return nil
+	}
+
+	newDate, err := parseAndAdjustDate(offset, baseDate)
+	if err != nil {
+		return fmt.Errorf("invalid offset format: %v", err)
+	}
+
+	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE email = ?", newDate.Format("2006-01-02-15"), email)
+	if err != nil {
+		return fmt.Errorf("error updating database: %v", err)
+	}
+
+	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s)", email, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset)
+	return nil
+}
+
+func CheckExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	now := time.Now()
+
+	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
+	if err != nil {
+		log.Printf("Error querying database: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	type subscription struct {
+		Email   string
+		SubEnd  string
+		UUID    string
+		Enabled string
+		Renew   int
+	}
+	var subscriptions []subscription
+
+	for rows.Next() {
+		var s subscription
+		err := rows.Scan(&s.Email, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
+		if err != nil {
+			log.Printf("Error scanning row: %v", err)
+			continue
+		}
+		subscriptions = append(subscriptions, s)
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Printf("Error processing rows: %v", err)
+		return
+	}
+
+	for _, s := range subscriptions {
+		if s.SubEnd != "" {
+			subEnd, err := time.Parse("2006-01-02-15", s.SubEnd)
+			if err != nil {
+				log.Printf("Error parsing date for %s: %v", s.Email, err)
+				continue
+			}
+
+			if subEnd.Before(now) {
+				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatId != ""
+
+				notifiedMutex.Lock()
+				if canSendNotifications && !notifiedUsers[s.Email] {
+					formattedDate := formatDate(s.SubEnd)
+					message := fmt.Sprintf("❌ Subscription expired\n\n"+
+						"Client:   *%s*\n"+
+						"Expiration date:   *%s*", s.Email, formattedDate)
+					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
+						notifiedUsers[s.Email] = true
+					}
+				}
+				notifiedMutex.Unlock()
+
+				if s.Renew >= 1 {
+					offset := fmt.Sprintf("%d", s.Renew)
+					err = AdjustDateOffset(memDB, s.Email, offset, now)
+					if err != nil {
+						log.Printf("Error renewing subscription for %s: %v", s.Email, err)
+						continue
+					}
+					log.Printf("Auto-renewed subscription for user %s for %d days", s.Email, s.Renew)
+
+					if canSendNotifications {
+						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
+							"Client:   *%s*\n"+
+							"Renewed for:   *%d days*", s.Email, s.Renew)
+						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
+							renewNotifiedUsers[s.Email] = true
+						}
+					}
+
+					notifiedMutex.Lock()
+					notifiedUsers[s.Email] = false
+					renewNotifiedUsers[s.Email] = false
+					notifiedMutex.Unlock()
+
+					if s.Enabled == "false" {
+						err = ToggleUserEnabled(s.Email, true, cfg, memDB)
+						if err != nil {
+							log.Printf("Error enabling user %s: %v", s.Email, err)
+							continue
+						}
+						UpdateEnabledInDB(memDB, s.Email, true)
+						log.Printf("User %s enabled", s.Email)
+					}
+				} else if s.Enabled == "true" {
+					err = ToggleUserEnabled(s.Email, false, cfg, memDB)
+					if err != nil {
+						log.Printf("Error disabling user %s: %v", s.Email, err)
+					} else {
+						log.Printf("User %s disabled", s.Email)
+					}
+					UpdateEnabledInDB(memDB, s.Email, false)
+				}
+			} else {
+				if s.Enabled == "false" {
+					err = ToggleUserEnabled(s.Email, true, cfg, memDB)
+					if err != nil {
+						log.Printf("Error enabling user %s: %v", s.Email, err)
+						continue
+					}
+					UpdateEnabledInDB(memDB, s.Email, true)
+					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.Email, s.SubEnd)
+				}
+			}
+		}
+	}
+}
+
+func CleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	// Получаем все теги из traffic_stats
+	rows, err := memDB.Query("SELECT source FROM traffic_stats")
+	if err != nil {
+		return fmt.Errorf("error retrieving tags from traffic_stats: %v", err)
+	}
+	defer rows.Close()
+
+	var trafficSources []string
+	for rows.Next() {
+		var source string
+		if err := rows.Scan(&source); err != nil {
+			return fmt.Errorf("error reading row from traffic_stats: %v", err)
+		}
+		trafficSources = append(trafficSources, source)
+	}
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("error processing rows from traffic_stats: %v", err)
+	}
+
+	// Извлекаем теги inbounds и outbounds из config.json
+	data, err := os.ReadFile(cfg.CoreConfig)
+	if err != nil {
+		return fmt.Errorf("error reading config.json: %v", err)
+	}
+
+	validTags := make(map[string]bool)
+	switch cfg.CoreType {
+	case "xray":
+		var cfgXray config.ConfigXray
+		if err := json.Unmarshal(data, &cfgXray); err != nil {
+			return fmt.Errorf("error parsing JSON for xray: %v", err)
+		}
+		for _, inbound := range cfgXray.Inbounds {
+			validTags[inbound.Tag] = true
+		}
+		for _, outbound := range cfgXray.Outbounds {
+			if tag, ok := outbound["tag"].(string); ok {
+				validTags[tag] = true
+			}
+		}
+	case "singbox":
+		var cfgSingbox config.ConfigSingbox
+		if err := json.Unmarshal(data, &cfgSingbox); err != nil {
+			return fmt.Errorf("error parsing JSON for singbox: %v", err)
+		}
+		for _, inbound := range cfgSingbox.Inbounds {
+			validTags[inbound.Tag] = true
+		}
+		for _, outbound := range cfgSingbox.Outbounds {
+			if tag, ok := outbound["tag"].(string); ok {
+				validTags[tag] = true
+			}
+		}
+	}
+
+	// Собираем теги для удаления
+	var invalidTags []string
+	var queries []string
+	for _, source := range trafficSources {
+		if !validTags[source] {
+			queries = append(queries, fmt.Sprintf("DELETE FROM traffic_stats WHERE source = '%s'", source))
+			invalidTags = append(invalidTags, source)
+		}
+	}
+
+	// Выполняем удаление
+	if len(queries) > 0 {
+		tx, err := memDB.Begin()
+		if err != nil {
+			return fmt.Errorf("error starting transaction: %v", err)
+		}
+
+		for _, query := range queries {
+			if _, err := tx.Exec(query); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("error executing delete query: %v", err)
+			}
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("error committing transaction: %v", err)
+		}
+
+		log.Printf("Deleted non-existent tags from traffic_stats: %s", strings.Join(invalidTags, ", "))
 	}
 
 	return nil
+}
+
+func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
+	mainConfigPath := cfg.CoreConfig
+	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+
+	switch cfg.CoreType {
+	case "xray":
+		// Read main config for Xray
+		mainConfigData, err := os.ReadFile(mainConfigPath)
+		if err != nil {
+			return fmt.Errorf("error reading Xray main config: %v", err)
+		}
+		var mainConfig config.ConfigXray
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing Xray main config: %v", err)
+		}
+
+		// Read disabled users config for Xray
+		var disabledConfig config.DisabledUsersConfigXray
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+			} else {
+				return fmt.Errorf("error reading Xray disabled users file: %v", err)
+			}
+		} else if len(disabledConfigData) == 0 {
+			disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+		} else {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing Xray disabled users file: %v", err)
+			}
+		}
+
+		// Determine source and target for Xray
+		sourceInbounds := mainConfig.Inbounds
+		targetInbounds := disabledConfig.Inbounds
+		if enabled {
+			sourceInbounds = disabledConfig.Inbounds
+			targetInbounds = mainConfig.Inbounds
+		}
+
+		// Collect users for Xray with deduplication by email and inbound tag
+		userMap := make(map[string]config.XrayClient) // Map tag -> client
+		found := false
+		for i, inbound := range sourceInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
+				clientMap := make(map[string]bool) // Track unique emails in inbound
+				for _, client := range inbound.Settings.Clients {
+					if client.Email == userIdentifier {
+						if !clientMap[client.Email] {
+							userMap[inbound.Tag] = client
+							clientMap[client.Email] = true
+							found = true
+						}
+					} else {
+						if !clientMap[client.Email] {
+							newClients = append(newClients, client)
+							clientMap[client.Email] = true
+						}
+					}
+				}
+				sourceInbounds[i].Settings.Clients = newClients
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols", userIdentifier)
+		}
+
+		// Check for duplicates in target inbounds for Xray
+		for _, inbound := range targetInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				for _, client := range inbound.Settings.Clients {
+					if client.Email == userIdentifier {
+						return fmt.Errorf("user %s already exists in target Xray config with tag %s", userIdentifier, inbound.Tag)
+					}
+				}
+			}
+		}
+
+		// Add users to existing target inbounds for Xray
+		for i, inbound := range targetInbounds {
+			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
+				if client, exists := userMap[inbound.Tag]; exists {
+					clientMap := make(map[string]bool)
+					newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients)+1)
+					for _, c := range inbound.Settings.Clients {
+						if !clientMap[c.Email] {
+							newClients = append(newClients, c)
+							clientMap[c.Email] = true
+						}
+					}
+					if !clientMap[userIdentifier] {
+						newClients = append(newClients, client)
+						log.Printf("Added user %s to inbound with tag %s for Xray", userIdentifier, inbound.Tag)
+					}
+					targetInbounds[i].Settings.Clients = newClients
+				}
+			}
+		}
+
+		// Create new inbounds if they don’t exist in target config for Xray
+		for _, mainInbound := range mainConfig.Inbounds {
+			if (mainInbound.Protocol == "vless" || mainInbound.Protocol == "trojan") && !hasInboundXray(targetInbounds, mainInbound.Tag) {
+				if client, exists := userMap[mainInbound.Tag]; exists {
+					newInbound := mainInbound
+					newInbound.Settings.Clients = []config.XrayClient{client}
+					targetInbounds = append(targetInbounds, newInbound)
+					log.Printf("Created new inbound with tag %s for user %s in Xray", newInbound.Tag, userIdentifier)
+				}
+			}
+		}
+
+		// Update configs for Xray
+		if enabled {
+			mainConfig.Inbounds = targetInbounds
+			disabledConfig.Inbounds = sourceInbounds
+		} else {
+			mainConfig.Inbounds = sourceInbounds
+			disabledConfig.Inbounds = targetInbounds
+		}
+
+		// Save main config for Xray
+		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing Xray main config: %v", err)
+		}
+		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
+			return fmt.Errorf("error writing Xray main config: %v", err)
+		}
+
+		// Save disabled users config for Xray
+		if len(disabledConfig.Inbounds) > 0 {
+			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
+			if err != nil {
+				return fmt.Errorf("error serializing Xray disabled users file: %v", err)
+			}
+			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
+				return fmt.Errorf("error writing Xray disabled users file: %v", err)
+			}
+		} else {
+			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Error removing empty .disabled_users for Xray: %v", err)
+			}
+		}
+
+	case "singbox":
+		// Read main config for Singbox
+		mainConfigData, err := os.ReadFile(mainConfigPath)
+		if err != nil {
+			return fmt.Errorf("error reading Singbox main config: %v", err)
+		}
+		var mainConfig config.ConfigSingbox
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing Singbox main config: %v", err)
+		}
+
+		// Read disabled users config for Singbox
+		var disabledConfig config.DisabledUsersConfigSingbox
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+			} else {
+				return fmt.Errorf("error reading Singbox disabled users file: %v", err)
+			}
+		} else if len(disabledConfigData) == 0 {
+			disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+		} else {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing Singbox disabled users file: %v", err)
+			}
+		}
+
+		// Determine source and target for Singbox
+		sourceInbounds := mainConfig.Inbounds
+		targetInbounds := disabledConfig.Inbounds
+		if enabled {
+			sourceInbounds = disabledConfig.Inbounds
+			targetInbounds = mainConfig.Inbounds
+		}
+
+		// Collect users for Singbox with deduplication by name and inbound tag
+		userMap := make(map[string]config.SingboxClient) // Map tag -> user
+		found := false
+		for i, inbound := range sourceInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				newUsers := make([]config.SingboxClient, 0, len(inbound.Users))
+				userNameMap := make(map[string]bool) // Track unique names in inbound
+				for _, user := range inbound.Users {
+					if user.Name == userIdentifier {
+						if !userNameMap[user.Name] {
+							userMap[inbound.Tag] = user
+							userNameMap[user.Name] = true
+							found = true
+						}
+					} else {
+						if !userNameMap[user.Name] {
+							newUsers = append(newUsers, user)
+							userNameMap[user.Name] = true
+						}
+					}
+				}
+				sourceInbounds[i].Users = newUsers
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols for Singbox", userIdentifier)
+		}
+
+		// Check for duplicates in target inbounds for Singbox
+		for _, inbound := range targetInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				for _, user := range inbound.Users {
+					if user.Name == userIdentifier {
+						return fmt.Errorf("user %s already exists in target Singbox config with tag %s", userIdentifier, inbound.Tag)
+					}
+				}
+			}
+		}
+
+		// Add users to existing target inbounds for Singbox
+		for i, inbound := range targetInbounds {
+			if inbound.Type == "vless" || inbound.Type == "trojan" {
+				if user, exists := userMap[inbound.Tag]; exists {
+					userNameMap := make(map[string]bool)
+					newUsers := make([]config.SingboxClient, 0, len(inbound.Users)+1)
+					for _, u := range inbound.Users {
+						if !userNameMap[u.Name] {
+							newUsers = append(newUsers, u)
+							userNameMap[u.Name] = true
+						}
+					}
+					if !userNameMap[userIdentifier] {
+						newUsers = append(newUsers, user)
+						log.Printf("Added user %s to inbound with tag %s for Singbox", userIdentifier, inbound.Tag)
+					}
+					targetInbounds[i].Users = newUsers
+				}
+			}
+		}
+
+		// Create new inbounds if they don’t exist in target config for Singbox
+		for _, mainInbound := range mainConfig.Inbounds {
+			if (mainInbound.Type == "vless" || mainInbound.Type == "trojan") && !hasInboundSingbox(targetInbounds, mainInbound.Tag) {
+				if user, exists := userMap[mainInbound.Tag]; exists {
+					newInbound := mainInbound
+					newInbound.Users = []config.SingboxClient{user}
+					targetInbounds = append(targetInbounds, newInbound)
+					log.Printf("Created new inbound with tag %s for user %s in Singbox", newInbound.Tag, userIdentifier)
+				}
+			}
+		}
+
+		// Update configs for Singbox
+		if enabled {
+			mainConfig.Inbounds = targetInbounds
+			disabledConfig.Inbounds = sourceInbounds
+		} else {
+			mainConfig.Inbounds = sourceInbounds
+			disabledConfig.Inbounds = targetInbounds
+		}
+
+		// Save main config for Singbox
+		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
+		if err != nil {
+			return fmt.Errorf("error serializing Singbox main config: %v", err)
+		}
+		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
+			return fmt.Errorf("error writing Singbox main config: %v", err)
+		}
+
+		// Save disabled users config for Singbox
+		if len(disabledConfig.Inbounds) > 0 {
+			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
+			if err != nil {
+				return fmt.Errorf("error serializing Singbox disabled users file: %v", err)
+			}
+			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
+				return fmt.Errorf("error writing Singbox disabled users file: %v", err)
+			}
+		} else {
+			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("Error removing empty .disabled_users for Singbox: %v", err)
+			}
+		}
+	}
+
+	UpdateEnabledInDB(memDB, userIdentifier, enabled)
+	log.Printf("User %s successfully moved (enabled=%t) to inbounds", userIdentifier, enabled)
+	return nil
+}
+
+func hasInboundXray(inbounds []config.XrayInbound, tag string) bool {
+	for _, inbound := range inbounds {
+		if inbound.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
+	for _, inbound := range inbounds {
+		if inbound.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+// Запуск задачи синхронизации базы и проверки подписок
+func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := CleanInvalidTrafficTags(memDB, cfg); err != nil {
+					log.Printf("Error cleaning non-existent tags: %v", err)
+				}
+				CheckExpiredSubscriptions(memDB, cfg)
+
+				if err := SyncToFileDB(memDB, cfg); err != nil {
+					log.Printf("Error synchronizing: %v", err)
+				} else {
+					log.Println("Database synchronized successfully")
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
