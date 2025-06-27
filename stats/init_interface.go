@@ -53,6 +53,5 @@ func InitNetworkMonitoring() error {
 
 	// Сохраняем монитор в пакете stats для дальнейшего использования
 	setTrafficMonitor(monitor)
-	log.Printf("Network monitoring initialized for interface %s", iface)
 	return nil
 }

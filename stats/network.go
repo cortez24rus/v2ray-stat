@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"v2ray-stat/config"
 )
 
 // NetworkStats holds network interface statistics
@@ -171,7 +172,7 @@ func FormatTraffic(bytes uint64) string {
 }
 
 // Запуск мониторинга сети
-func MonitorNetworkRoutine(ctx context.Context, wg *sync.WaitGroup) {
+func MonitorNetwork(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 	trafficMonitor := GetTrafficMonitor()
 	if trafficMonitor == nil {
 		log.Println("Network monitoring not initialized, skipping routine")
@@ -181,7 +182,7 @@ func MonitorNetworkRoutine(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {

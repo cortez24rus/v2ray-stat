@@ -439,6 +439,7 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 
 func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		if r.Method != http.MethodPatch {
@@ -505,13 +506,8 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			return
 		}
 
+		log.Printf("IP address limit for user %s set to %d [%v]", userIdentifier, ipLimitInt, time.Since(start))
 		w.WriteHeader(http.StatusOK)
-		_, err = fmt.Fprintf(w, "lim_ip for '%s' updated to '%d'\n", userIdentifier, ipLimitInt)
-		if err != nil {
-			log.Printf("Error writing response for user %s: %v", userIdentifier, err)
-			http.Error(w, "Error sending response", http.StatusInternalServerError)
-			return
-		}
 	}
 }
 
@@ -705,6 +701,7 @@ func saveConfig(w http.ResponseWriter, configPath string, configData interface{}
 
 func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		if r.Method != http.MethodPost {
@@ -823,7 +820,8 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 			configData = cfgSingBox
 		}
 
-		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s with UUID %s added to config.json with inbound %s", userIdentifier, credential, inboundTag)); err != nil {
+		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s added to configuration with inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+			log.Printf("Failed to add user %s: error saving configuration: %v [%v]", userIdentifier, err, time.Since(start))
 			return
 		}
 
@@ -833,6 +831,7 @@ func AddUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http
 
 func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		if r.Method != http.MethodDelete {
@@ -909,7 +908,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			mainUpdated, removedFromMain := removeXrayUser(mainConfig.Inbounds)
 			if removedFromMain {
 				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 					return
 				}
 				return
@@ -920,7 +919,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 						return
 					}
 				} else {
@@ -985,7 +984,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			mainUpdated, removedFromMain := removeSingboxUser(mainConfig.Inbounds)
 			if removedFromMain {
 				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s", userIdentifier, inboundTag)); err != nil {
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 					return
 				}
 				return
@@ -996,7 +995,7 @@ func DeleteUserHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) h
 			if removedFromDisabled {
 				disabledConfig.Inbounds = disabledUpdated
 				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s", userIdentifier, inboundTag)); err != nil {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 						return
 					}
 				} else {

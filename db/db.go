@@ -32,6 +32,8 @@ var (
 )
 
 func InitDB(db *sql.DB) error {
+	start := time.Now()
+
 	_, err := db.Exec(`
 		PRAGMA cache_size = 2000;
 		PRAGMA journal_mode = MEMORY;
@@ -74,12 +76,14 @@ func InitDB(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("error executing SQL query: %v", err)
 	}
-	log.Printf("Database initialized successfully")
+	log.Printf("Database initialized successfully [%v]", time.Since(start))
 	return nil
 }
 
 // BackupDB копирует данные из файловой базы (srcDB) в in-memory базу (memDB) с использованием SQLite Backup API
 func BackupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
+	start := time.Now()
+
 	// Получаем соединения к исходной и целевой базам
 	srcConn, err := srcDB.Conn(context.Background())
 	if err != nil {
@@ -128,7 +132,7 @@ func BackupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("error during backup: %v", err)
 	}
 
-	log.Println("Database backup to memory completed successfully")
+	log.Printf("Database backup to memory completed successfully [%v]", time.Since(start))
 	return nil
 }
 
@@ -234,6 +238,8 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 		return nil
 	}
 
+	start := time.Now() // Замер времени начала выполнения
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -273,7 +279,7 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 	}
 
 	if len(addedEmails) > 0 {
-		log.Printf("Users successfully added to database: %s", strings.Join(addedEmails, ", "))
+		log.Printf("Users successfully added to database: %s [%v]", strings.Join(addedEmails, ", "), time.Since(start))
 	}
 
 	return nil
@@ -287,6 +293,8 @@ func DelUserFromDB(memDB *sql.DB, cfg *config.Config) error {
 	case "singbox":
 		clients = extractUsersSingboxServer(cfg)
 	}
+
+	start := time.Now()
 
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
@@ -327,7 +335,7 @@ func DelUserFromDB(memDB *sql.DB, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("error executing transaction: %v", err)
 		}
-		log.Printf("Users successfully deleted from database: %s", strings.Join(deletedEmails, ", "))
+		log.Printf("Users successfully deleted from database: %s [%v]", strings.Join(deletedEmails, ", "), time.Since(start))
 	}
 
 	return nil
@@ -344,8 +352,6 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
-	start := time.Now() // Замер времени выполнения
-
 	// Открытие или создание файла базы данных SQLite (файл создаётся автоматически, если не существует)
 	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
 	if err != nil {
@@ -434,8 +440,6 @@ func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("failed to commit transaction: %v", err)
 	}
 
-	// Логирование времени выполнения
-	log.Printf("SyncToFileDB completed in %v", time.Since(start))
 	return nil
 }
 
@@ -448,7 +452,7 @@ func UpdateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
 	if err != nil {
 		log.Printf("Error updating database for email %s: %v", email, err)
 	} else {
-		log.Printf("Updated enabled status for %s to %s", email, enabledStr)
+		// log.Printf("Updated enabled status for %s to %s", email, enabledStr)
 	}
 }
 
@@ -491,6 +495,8 @@ func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
 }
 
 func AdjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) error {
+	start := time.Now()
+
 	offset = strings.TrimSpace(offset)
 
 	if offset == "0" {
@@ -512,7 +518,7 @@ func AdjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) e
 		return fmt.Errorf("error updating database: %v", err)
 	}
 
-	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s)", email, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset)
+	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s) [%v]", email, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset, time.Since(start))
 	return nil
 }
 
@@ -726,8 +732,15 @@ func CleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 }
 
 func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
+	start := time.Now()
+
 	mainConfigPath := cfg.CoreConfig
 	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+
+	status := "disabled"
+	if enabled {
+		status = "enabled"
+	}
 
 	switch cfg.CoreType {
 	case "xray":
@@ -820,7 +833,7 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !clientMap[userIdentifier] {
 						newClients = append(newClients, client)
-						log.Printf("Added user %s to inbound with tag %s for Xray", userIdentifier, inbound.Tag)
+						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.CoreType, time.Since(start))
 					}
 					targetInbounds[i].Settings.Clients = newClients
 				}
@@ -962,7 +975,7 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !userNameMap[userIdentifier] {
 						newUsers = append(newUsers, user)
-						log.Printf("Added user %s to inbound with tag %s for Singbox", userIdentifier, inbound.Tag)
+						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.CoreType, time.Since(start))
 					}
 					targetInbounds[i].Users = newUsers
 				}
@@ -1016,7 +1029,6 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 	}
 
 	UpdateEnabledInDB(memDB, userIdentifier, enabled)
-	log.Printf("User %s successfully moved (enabled=%t) to inbounds", userIdentifier, enabled)
 	return nil
 }
 
@@ -1053,10 +1065,11 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 				}
 				CheckExpiredSubscriptions(memDB, cfg)
 
+				start := time.Now()
 				if err := SyncToFileDB(memDB, cfg); err != nil {
-					log.Printf("Error synchronizing: %v", err)
+					log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
 				} else {
-					log.Println("Database synchronized successfully")
+					log.Printf("Database synchronized successfully [%v]", time.Since(start))
 				}
 			case <-ctx.Done():
 				return

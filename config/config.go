@@ -28,6 +28,7 @@ type Config struct {
 	DiskThreshold         int
 	MemoryThreshold       int
 	Features              map[string]bool
+	MonitorTickerInterval int
 }
 
 // defaultConfig provides default configuration values.
@@ -43,11 +44,12 @@ var defaultConfig = Config{
 	IpTtl:                 66 * time.Second,
 	TelegramBotToken:      "",
 	TelegramChatId:        "",
-	Services:              []string{"xray", "haproxy", "nginx", "fail2ban-server"},
+	Services:              []string{"xray", "fail2ban-server"},
 	MemoryAverageInterval: 120,
 	DiskThreshold:         0,
 	MemoryThreshold:       0,
 	Features:              make(map[string]bool),
+	MonitorTickerInterval: 10,
 }
 
 // LoadConfig reads configuration from the specified file and returns a Config struct.
@@ -155,6 +157,14 @@ func LoadConfig(configFile string) (Config, error) {
 		features := strings.Split(val, ",")
 		for _, feature := range features {
 			cfg.Features[strings.TrimSpace(feature)] = true
+		}
+	}
+	if val, ok := configMap["MONITOR_TICKER_INTERVAL"]; ok && val != "" {
+		interval, err := strconv.Atoi(val)
+		if err != nil || interval < 1 {
+			log.Printf("Invalid MONITOR_TICKER_INTERVAL value '%s', using default %d seconds", val, cfg.MonitorTickerInterval)
+		} else {
+			cfg.MonitorTickerInterval = interval
 		}
 	}
 

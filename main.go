@@ -114,10 +114,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		if !exists {
 			previous = 0
 		}
-		diff := current - previous
-		if diff < 0 {
-			diff = 0
-		}
+		diff := max(current-previous, 0)
 
 		parts := strings.Fields(key)
 		source := parts[0]
@@ -157,7 +154,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	previousStats = strings.Join(currentStats, "\n")
 }
 
-func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
+func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
@@ -253,9 +250,9 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse) {
 			previousDownlink = 0
 		}
 
-		uplinkOnline := sessUplink - previousUplink
-		downlinkOnline := sessDownlink - previousDownlink
-		rate := (uplinkOnline + downlinkOnline) * 8 / 10
+		uplinkOnline := max(sessUplink-previousUplink, 0)
+		downlinkOnline := max(sessDownlink-previousDownlink, 0)
+		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
 
 		// log.Printf("Traffic for email=%s: sessUplink=%d, previousUplink=%d, sessDownlink=%d, previousDownlink=%d, uplinkOnline=%d, downlinkOnline=%d, rate=%d (raw)",
 		// 	email, sessUplink, previousUplink, sessDownlink, previousDownlink, uplinkOnline, downlinkOnline, rate)
@@ -476,7 +473,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -493,7 +490,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 					log.Printf("Error retrieving API data: %v", err)
 				} else {
 					updateProxyStats(memDB, apiData)
-					updateClientStats(memDB, apiData)
+					updateClientStats(memDB, apiData, cfg)
 				}
 				readNewLines(memDB, accessLog, offset, cfg)
 			case <-ctx.Done():
@@ -528,7 +525,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
 
 	go func() {
-		log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
+		// log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Error starting server: %v", err)
 		}
@@ -542,7 +539,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down server: %v", err)
 	}
-	log.Println("API server stopped successfully")
+	// log.Println("API server stopped successfully")
 
 	wg.Done()
 }
@@ -557,7 +554,7 @@ func main() {
 	// Инициализация базы данных и логов
 	memDB, accessLog, bannedLog, offset, bannedOffset, err := initFile(&cfg)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		log.Fatalf("Failed to initialize file: %v", err)
 	}
 	defer memDB.Close()
 	defer accessLog.Close()
@@ -587,7 +584,7 @@ func main() {
 		if err := stats.InitNetworkMonitoring(); err != nil {
 			log.Printf("Failed to initialize network monitoring: %v", err)
 		}
-		stats.MonitorNetworkRoutine(ctx, &wg)
+		stats.MonitorNetwork(ctx, &cfg, &wg)
 	}
 
 	if cfg.Features["report"] {
@@ -601,10 +598,11 @@ func main() {
 	cancel()
 
 	// Synchronize database
+	start := time.Now()
 	if err := db.SyncToFileDB(memDB, &cfg); err != nil {
-		log.Printf("Error synchronizing data to fileDB: %v", err)
+		log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
 	} else {
-		log.Println("Data successfully saved to database file")
+		log.Printf("Database synchronized successfully [%v]", time.Since(start))
 	}
 
 	wg.Wait()

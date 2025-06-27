@@ -101,7 +101,6 @@ func MonitorDailyReport(ctx context.Context, memDB *sql.DB, cfg *config.Config, 
 			case <-ticker.C:
 				SendDailyReport(memDB, cfg)
 			case <-ctx.Done():
-				log.Println("Daily report routine stopped")
 				return
 			}
 		}
