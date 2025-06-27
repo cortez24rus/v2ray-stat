@@ -86,11 +86,8 @@ curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?user=newuser&inboundTag
 ```
 
 ### Включение/отключение пользователя
-- Включить или отключить пользователя, указав enabled=true или enabled=false.
+- Включить или отключить пользователя, указав true или false.
 
-```bash
-curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=true"
-```
 ```bash
 curl -X PATCH http://127.0.0.1:9952/api/v1/set_enabled -d "user=newuser&enabled=false"
 ```
