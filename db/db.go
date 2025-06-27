@@ -352,6 +352,9 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	// Открытие или создание файла базы данных SQLite (файл создаётся автоматически, если не существует)
 	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
 	if err != nil {
