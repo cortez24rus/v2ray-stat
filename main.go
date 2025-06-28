@@ -401,14 +401,14 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 }
 
 // Инициализация базы данных
-func initFile(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File, offset, bannedOffset *int64, err error) {
+func initFile(cfg *config.Config) (memDB *sql.DB, err error) {
 	_, err = os.Stat(cfg.DatabasePath)
 	fileExists := !os.IsNotExist(err)
 
 	memDB, err = sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		log.Printf("Ошибка создания in-memory базы данных: %v", err)
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to create in-memory database: %v", err)
+		return nil, fmt.Errorf("failed to create in-memory database: %v", err)
 	}
 
 	if fileExists {
@@ -416,76 +416,59 @@ func initFile(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File,
 		if err != nil {
 			log.Printf("Ошибка открытия базы данных: %v", err)
 			memDB.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf("failed to open database: %v", err)
+			return nil, fmt.Errorf("failed to open database: %v", err)
 		}
 		defer fileDB.Close()
 
 		if err = db.InitDB(fileDB); err != nil {
 			log.Printf("Ошибка инициализации базы данных: %v", err)
 			memDB.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize database: %v", err)
+			return nil, fmt.Errorf("failed to initialize database: %v", err)
 		}
 
 		if err = db.BackupDB(fileDB, memDB, cfg); err != nil {
 			log.Printf("Ошибка копирования данных в память: %v", err)
 			memDB.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf("failed to copy data to memory: %v", err)
+			return nil, fmt.Errorf("failed to copy data to memory: %v", err)
 		}
 	} else {
 		if err = db.InitDB(memDB); err != nil {
 			log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
 			memDB.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
+			return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
 		}
 	}
 
-	accessLog, err = os.OpenFile(cfg.AccessLogPath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		log.Printf("Ошибка открытия access.log: %v", err)
-		memDB.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to open access.log: %v", err)
-	}
-
-	bannedLog, err = os.OpenFile(cfg.BannedLogFile, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		log.Printf("Ошибка открытия файла логов банов: %v", err)
-		memDB.Close()
-		accessLog.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to open ban log file: %v", err)
-	}
-
-	var accessOffset int64
-	accessLog.Seek(0, 2)
-	accessOffset, err = accessLog.Seek(0, 1)
-	if err != nil {
-		log.Printf("Ошибка получения позиции файла логов: %v", err)
-		memDB.Close()
-		accessLog.Close()
-		bannedLog.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to get log file position: %v", err)
-	}
-
-	var banOffset int64
-	bannedLog.Seek(0, 2)
-	banOffset, err = bannedLog.Seek(0, 1)
-	if err != nil {
-		log.Printf("Ошибка получения позиции файла логов банов: %v", err)
-		memDB.Close()
-		accessLog.Close()
-		bannedLog.Close()
-		return nil, nil, nil, nil, nil, fmt.Errorf("failed to get ban log file position: %v", err)
-	}
-
-	return memDB, accessLog, bannedLog, &accessOffset, &banOffset, nil
+	return memDB, nil
 }
 
 // Запуск задачи мониторинга пользователей и логов
-func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File, offset *int64, cfg *config.Config, wg *sync.WaitGroup) {
+func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+
+		accessLog, err := os.OpenFile(cfg.AccessLogPath, os.O_RDONLY|os.O_CREATE, 0644)
+		if err != nil {
+			log.Printf("Ошибка открытия файла логов %s: %v", cfg.AccessLogPath, err)
+			return
+		}
+		defer accessLog.Close()
+
+		var accessOffset int64
+		accessLog.Seek(0, 2)
+		accessOffset, err = accessLog.Seek(0, 1)
+		if err != nil {
+			log.Printf("Ошибка получения позиции файла логов: %v", err)
+			return
+		}
+
 		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
 		defer ticker.Stop()
+
+		dailyTicker := time.NewTicker(24 * time.Hour)
+		defer dailyTicker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
@@ -503,7 +486,21 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 					updateProxyStats(memDB, apiData)
 					updateClientStats(memDB, apiData, cfg)
 				}
-				readNewLines(memDB, accessLog, offset, cfg)
+				readNewLines(memDB, accessLog, &accessOffset, cfg)
+
+			case <-dailyTicker.C:
+				if err := accessLog.Close(); err != nil {
+					log.Printf("Ошибка при закрытии файла логов %s: %v", cfg.AccessLogPath, err)
+				}
+				accessLog, err = os.OpenFile(cfg.AccessLogPath, os.O_RDONLY|os.O_CREATE|os.O_TRUNC, 0644)
+				if err != nil {
+					log.Printf("Ошибка при открытии файла логов %s после очистки: %v", cfg.AccessLogPath, err)
+					return
+				}
+
+				accessOffset = 0
+				log.Printf("Файл логов %s успешно очищен", cfg.AccessLogPath)
+
 			case <-ctx.Done():
 				return
 			}
@@ -563,13 +560,11 @@ func main() {
 	}
 
 	// Инициализация базы данных и логов
-	memDB, accessLog, bannedLog, offset, bannedOffset, err := initFile(&cfg)
+	memDB, err := initFile(&cfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize file: %v", err)
 	}
 	defer memDB.Close()
-	defer accessLog.Close()
-	defer bannedLog.Close()
 
 	//if err := db.SyncToFileDB(memDB, &cfg); err != nil {
 	//	log.Printf("Ошибка начальной синхронизации базы данных: %v", err)
@@ -590,10 +585,10 @@ func main() {
 	wg.Add(1)
 	go startAPIServer(ctx, memDB, &cfg, &wg)
 
-	monitorUsersAndLogs(ctx, memDB, accessLog, offset, &cfg, &wg)
+	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
 	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
-	monitor.MonitorBannedLogRoutine(ctx, bannedLog, bannedOffset, &cfg, &wg)
+	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
 	if cfg.Features["network"] {
 		if err := stats.InitNetworkMonitoring(); err != nil {

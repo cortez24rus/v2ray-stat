@@ -19,8 +19,8 @@ var (
 )
 
 // MonitorBannedLog читает новые записи из файла banned.log и отправляет уведомления в Telegram.
-func MonitorBannedLog(bannedLog *os.File, offset *int64, cfg *config.Config) error {
-	bannedLog.Seek(*offset, 0)
+func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) error {
+	bannedLog.Seek(*bannedOffset, 0)
 	scanner := bufio.NewScanner(bannedLog)
 
 	for scanner.Scan() {
@@ -71,22 +71,39 @@ func MonitorBannedLog(bannedLog *os.File, offset *int64, cfg *config.Config) err
 		log.Printf("Error retrieving ban log position: %v", err)
 		return fmt.Errorf("error retrieving ban log position: %v", err)
 	}
-	*offset = pos
+	*bannedOffset = pos
 
 	return nil
 }
 
 // MonitorBannedLogRoutine запускает периодический мониторинг файла banned.log.
-func MonitorBannedLogRoutine(ctx context.Context, bannedLog *os.File, bannedOffset *int64, cfg *config.Config, wg *sync.WaitGroup) {
+func MonitorBannedLog(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+
+		bannedLog, err := os.OpenFile(cfg.BannedLogFile, os.O_RDONLY|os.O_CREATE, 0644)
+		if err != nil {
+			log.Printf("Ошибка открытия файла логов %s: %v", cfg.BannedLogFile, err)
+			return
+		}
+		defer bannedLog.Close()
+
+		var bannedOffset int64
+		bannedLog.Seek(0, 2)
+		bannedOffset, err = bannedLog.Seek(0, 1)
+		if err != nil {
+			log.Printf("Ошибка получения позиции файла логов банов: %v", err)
+			return
+		}
+
 		ticker := time.NewTicker(10 * time.Second) // Используем тот же интервал, что и в monitorUsersAndLogs
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
-				if err := MonitorBannedLog(bannedLog, bannedOffset, cfg); err != nil {
+				if err := MonitorBanned(bannedLog, &bannedOffset, cfg); err != nil {
 					log.Printf("Error monitoring banned log: %v", err)
 				}
 			case <-ctx.Done():
