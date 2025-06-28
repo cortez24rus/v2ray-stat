@@ -78,7 +78,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	if !CheckTableExists(memDB, "traffic_stats") {
+	if !db.CheckTableExists(memDB, "traffic_stats") {
 		log.Printf("Table traffic_stats does not exist, reinitializing database")
 		if err := db.InitDB(memDB); err != nil {
 			log.Printf("Failed to reinitialize database: %v", err)
@@ -393,19 +393,6 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 	dnsStats[email][domain]++
 }
 
-func CheckTableExists(db *sql.DB, tableName string) bool {
-	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false
-		}
-		log.Printf("Error checking table existence for %s: %v", tableName, err)
-		return false
-	}
-	return name == tableName
-}
-
 func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
 	log.Printf("Starting readNewLines, checking database integrity")
 	dbMutex.Lock()
@@ -414,7 +401,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	// Проверка существования таблиц
 	requiredTables := []string{"clients_stats", "dns_stats"}
 	for _, table := range requiredTables {
-		if !CheckTableExists(memDB, table) {
+		if !db.CheckTableExists(memDB, table) {
 			log.Printf("Table %s does not exist, attempting to reinitialize", table)
 			if err := db.InitDB(memDB); err != nil {
 				log.Printf("Failed to reinitialize database for table %s: %v", table, err)

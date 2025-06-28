@@ -1071,3 +1071,16 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 		}
 	}()
 }
+
+func CheckTableExists(db *sql.DB, tableName string) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Error checking table existence for %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
+}
