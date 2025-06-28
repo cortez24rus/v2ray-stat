@@ -87,7 +87,7 @@ func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(1 * time.Minute)
+		ticker := time.NewTicker(15 * time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
