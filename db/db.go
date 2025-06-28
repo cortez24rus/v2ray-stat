@@ -342,6 +342,16 @@ func DelUserFromDB(memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
+func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
+	ipStr := strings.Join(ipList, ",")
+	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
+	_, err := tx.Exec(query, ipStr, email)
+	if err != nil {
+		return fmt.Errorf("error updating data: %v", err)
+	}
+	return nil
+}
+
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
@@ -1070,17 +1080,4 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 			}
 		}
 	}()
-}
-
-func CheckTableExists(db *sql.DB, tableName string) bool {
-	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false
-		}
-		log.Printf("Error checking table existence for %s: %v", tableName, err)
-		return false
-	}
-	return name == tableName
 }
