@@ -1060,7 +1060,7 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 	go func() {
 		defer wg.Done()
 		log.Printf("[%s] Запуск MonitorSubscriptionsAndSync", time.Now().Format("2006/01/02 15:04:05"))
-		ticker := time.NewTicker(1 * time.Minute) // Изменено на 1 минуту
+		ticker := time.NewTicker(10 * time.Minute) // Изменено на 1 минуту
 		defer ticker.Stop()
 		for {
 			select {
