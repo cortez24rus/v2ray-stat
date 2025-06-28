@@ -31,6 +31,19 @@ var (
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
 )
 
+func CheckTableExists(db *sql.DB, tableName string) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Error checking table existence for %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
+}
+
 func InitDB(db *sql.DB) error {
 	start := time.Now()
 
@@ -43,34 +56,35 @@ func InitDB(db *sql.DB) error {
 	}
 
 	query := `
-	CREATE TABLE IF NOT EXISTS clients_stats (
-	    email TEXT PRIMARY KEY,
-	    uuid TEXT,
-	    rate INTEGER DEFAULT 0,
-	    enabled TEXT,
-	    created TEXT,
-	    sub_end TEXT DEFAULT '',
-	    renew INTEGER DEFAULT 0,
-	    lim_ip INTEGER DEFAULT 0,
-	    ips TEXT DEFAULT '',
-	    uplink INTEGER DEFAULT 0,
-	    downlink INTEGER DEFAULT 0,
-	    sess_uplink INTEGER DEFAULT 0,
-	    sess_downlink INTEGER DEFAULT 0
-	);
-    CREATE TABLE IF NOT EXISTS traffic_stats (
-		source TEXT PRIMARY KEY,
-		uplink INTEGER DEFAULT 0,
-		downlink INTEGER DEFAULT 0,
-		sess_uplink INTEGER DEFAULT 0,
-		sess_downlink INTEGER DEFAULT 0
-    );
-	CREATE TABLE IF NOT EXISTS dns_stats (
-		email TEXT NOT NULL,
-		count INTEGER DEFAULT 1,
-		domain TEXT NOT NULL,
-		PRIMARY KEY (email, domain)
-	);`
+		CREATE TABLE IF NOT EXISTS clients_stats (
+			email TEXT PRIMARY KEY,
+			uuid TEXT,
+			rate INTEGER DEFAULT 0,
+			enabled TEXT,
+			created TEXT,
+			sub_end TEXT DEFAULT '',
+			renew INTEGER DEFAULT 0,
+			lim_ip INTEGER DEFAULT 0,
+			ips TEXT DEFAULT '',
+			uplink INTEGER DEFAULT 0,
+			downlink INTEGER DEFAULT 0,
+			sess_uplink INTEGER DEFAULT 0,
+			sess_downlink INTEGER DEFAULT 0
+		);
+		CREATE TABLE IF NOT EXISTS traffic_stats (
+			source TEXT PRIMARY KEY,
+			uplink INTEGER DEFAULT 0,
+			downlink INTEGER DEFAULT 0,
+			sess_uplink INTEGER DEFAULT 0,
+			sess_downlink INTEGER DEFAULT 0
+		);
+		CREATE TABLE IF NOT EXISTS dns_stats (
+			email TEXT NOT NULL,
+			count INTEGER DEFAULT 1,
+			domain TEXT NOT NULL,
+			PRIMARY KEY (email, domain)
+		);
+	`
 
 	_, err = db.Exec(query)
 	if err != nil {
@@ -361,6 +375,17 @@ func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
 		return fmt.Errorf("failed to open file database at %s: %v", cfg.DatabasePath, err)
 	}
 	defer fileDB.Close()
+
+	requiredTables := []string{"clients_stats", "traffic_stats", "dns_stats"}
+	for _, table := range requiredTables {
+		if !CheckTableExists(fileDB, table) {
+			log.Printf("Table %s does not exist in fileDB, initializing", table)
+			if err := InitDB(fileDB); err != nil {
+				return fmt.Errorf("failed to initialize file database: %v", err)
+			}
+			break
+		}
+	}
 
 	// Проверка необходимости инициализации базы данных
 	var tableCount int

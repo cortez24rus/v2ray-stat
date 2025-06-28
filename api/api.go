@@ -52,6 +52,15 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
+		if !db.CheckTableExists(memDB, "clients_stats") {
+			log.Printf("Table clients_stats does not exist, reinitializing database")
+			if err := db.InitDB(memDB); err != nil {
+				log.Printf("Failed to reinitialize database: %v", err)
+				http.Error(w, "Database error", http.StatusInternalServerError)
+				return
+			}
+		}
+
 		rows, err := memDB.Query("SELECT email, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
@@ -326,6 +335,19 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 		if r.Method != http.MethodGet {
 			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
 			return
+		}
+
+		requiredTables := []string{"traffic_stats", "clients_stats"}
+		for _, table := range requiredTables {
+			if !db.CheckTableExists(memDB, table) {
+				log.Printf("Table %s does not exist, reinitializing database", table)
+				if err := db.InitDB(memDB); err != nil {
+					log.Printf("Failed to reinitialize database: %v", err)
+					http.Error(w, "Database error", http.StatusInternalServerError)
+					return
+				}
+				break
+			}
 		}
 
 		mode := r.URL.Query().Get("mode")

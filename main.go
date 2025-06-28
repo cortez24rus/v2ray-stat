@@ -78,6 +78,14 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	if !db.CheckTableExists(memDB, "traffic_stats") {
+		log.Printf("Table traffic_stats does not exist, reinitializing database")
+		if err := db.InitDB(memDB); err != nil {
+			log.Printf("Failed to reinitialize database: %v", err)
+			return
+		}
+	}
+
 	currentStats := extractProxyTraffic(apiData)
 
 	if previousStats == "" {
@@ -157,6 +165,14 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
+
+	if !db.CheckTableExists(memDB, "clients_stats") {
+		log.Printf("Table clients_stats does not exist, reinitializing database")
+		if err := db.InitDB(memDB); err != nil {
+			log.Printf("Failed to reinitialize database: %v", err)
+			return
+		}
+	}
 
 	clientCurrentStats := extractUserTraffic(apiData)
 
@@ -348,6 +364,18 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	requiredTables := []string{"clients_stats", "dns_stats"}
+	for _, table := range requiredTables {
+		if !db.CheckTableExists(memDB, table) {
+			log.Printf("Table %s does not exist, reinitializing database", table)
+			if err := db.InitDB(memDB); err != nil {
+				log.Printf("Failed to reinitialize database: %v", err)
+				return
+			}
+			break
+		}
+	}
+
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
@@ -425,6 +453,17 @@ func initFile(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File,
 			log.Printf("Error initializing in-memory database: %v", err)
 			memDB.Close()
 			return nil, nil, nil, nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
+		}
+	}
+
+	requiredTables := []string{"clients_stats", "traffic_stats", "dns_stats"}
+	for _, table := range requiredTables {
+		if !db.CheckTableExists(memDB, table) {
+			log.Printf("Table %s is missing after initialization", table)
+			memDB.Close()
+			accessLog.Close()
+			bannedLog.Close()
+			return nil, nil, nil, nil, nil, fmt.Errorf("table %s is missing after initialization", table)
 		}
 	}
 
