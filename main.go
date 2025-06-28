@@ -78,6 +78,14 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	if !CheckTableExists(memDB, "traffic_stats") {
+		log.Printf("Table traffic_stats does not exist, reinitializing database")
+		if err := db.InitDB(memDB); err != nil {
+			log.Printf("Failed to reinitialize database: %v", err)
+			return
+		}
+	}
+
 	currentStats := extractProxyTraffic(apiData)
 
 	if previousStats == "" {
@@ -293,6 +301,11 @@ type DNSStat struct {
 }
 
 func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error {
+	if !CheckTableExistsTx(tx, "dns_stats") {
+		log.Printf("Table dns_stats does not exist in transaction")
+		return fmt.Errorf("table dns_stats does not exist")
+	}
+
 	for email, domains := range dnsStats {
 		for domain, count := range domains {
 			_, err := tx.Exec(`
@@ -308,7 +321,27 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error
 	return nil
 }
 
+func CheckTableExistsTx(tx *sql.Tx, tableName string) bool {
+	var name string
+	err := tx.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Error checking table existence for %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
+}
+
 func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
+	if !CheckTableExistsTx(tx, "clients_stats") {
+		log.Printf("Table clients_stats does not exist in transaction, attempting to reinitialize")
+		// Здесь мы не можем напрямую вызвать InitDB, так как tx — это транзакция, а не полная база
+		// Вместо этого, предполагаем, что вызывающая функция (readNewLines) уже проверила
+		return fmt.Errorf("table clients_stats does not exist")
+	}
+
 	ipStr := strings.Join(ipList, ",")
 	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
 	_, err := tx.Exec(query, ipStr, email)
@@ -319,6 +352,11 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int, cfg *config.Config) {
+	if !CheckTableExistsTx(tx, "clients_stats") || !CheckTableExistsTx(tx, "dns_stats") {
+		log.Printf("Tables clients_stats or dns_stats do not exist in transaction, skipping processLogLine")
+		return
+	}
+
 	matches := accessLogRegex.FindStringSubmatch(line)
 	if len(matches) != 4 {
 		return
@@ -346,6 +384,7 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 
 	if err := UpdateIPInDB(tx, email, validIPs); err != nil {
 		log.Printf("Error updating IP in database: %v", err)
+		return
 	}
 
 	if dnsStats[email] == nil {
@@ -354,18 +393,43 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 	dnsStats[email][domain]++
 }
 
-func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
-	log.Printf("Checking tables before reading new lines")
+func CheckTableExists(db *sql.DB, tableName string) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Error checking table existence for %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
+}
 
+func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
+	log.Printf("Starting readNewLines, checking database integrity")
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
+
+	// Проверка существования таблиц
+	requiredTables := []string{"clients_stats", "dns_stats"}
+	for _, table := range requiredTables {
+		if !CheckTableExists(memDB, table) {
+			log.Printf("Table %s does not exist, attempting to reinitialize", table)
+			if err := db.InitDB(memDB); err != nil {
+				log.Printf("Failed to reinitialize database for table %s: %v", table, err)
+				return
+			}
+			log.Printf("Database reinitialized successfully for table %s", table)
+		}
+	}
 
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
 	tx, err := memDB.Begin()
 	if err != nil {
-		log.Printf("Error starting transaction: %v", err)
+		log.Printf("Error starting transaction in readNewLines: %v", err)
 		return
 	}
 
@@ -376,26 +440,26 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading file: %v", err)
+		log.Printf("Error reading file in readNewLines: %v", err)
 		tx.Rollback()
 		return
 	}
 
 	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
-		log.Printf("Error during batch update of DNS queries: %v", err)
+		log.Printf("Error during batch update of DNS queries in readNewLines: %v", err)
 		tx.Rollback()
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("Error committing transaction: %v", err)
+		log.Printf("Error committing transaction in readNewLines: %v", err)
 		tx.Rollback()
 		return
 	}
 
 	pos, err := file.Seek(0, 1)
 	if err != nil {
-		log.Printf("Error retrieving file position: %v", err)
+		log.Printf("Error retrieving file position in readNewLines: %v", err)
 		return
 	}
 	*offset = pos
@@ -504,7 +568,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 					updateProxyStats(memDB, apiData)
 					updateClientStats(memDB, apiData, cfg)
 				}
-				// readNewLines(memDB, accessLog, offset, cfg)
+				readNewLines(memDB, accessLog, offset, cfg)
 			case <-ctx.Done():
 				return
 			}
