@@ -142,7 +142,7 @@ func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg
 			}
 		}()
 
-		ticker := time.NewTicker(3 * time.Minute)
+		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
 
 		for {
