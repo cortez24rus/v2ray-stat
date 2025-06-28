@@ -78,14 +78,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	if !db.CheckTableExists(memDB, "traffic_stats") {
-		log.Printf("Table traffic_stats does not exist, reinitializing database")
-		if err := db.InitDB(memDB); err != nil {
-			log.Printf("Failed to reinitialize database: %v", err)
-			return
-		}
-	}
-
 	currentStats := extractProxyTraffic(apiData)
 
 	if previousStats == "" {
@@ -165,14 +157,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
-
-	if !db.CheckTableExists(memDB, "clients_stats") {
-		log.Printf("Table clients_stats does not exist, reinitializing database")
-		if err := db.InitDB(memDB); err != nil {
-			log.Printf("Failed to reinitialize database: %v", err)
-			return
-		}
-	}
 
 	clientCurrentStats := extractUserTraffic(apiData)
 
@@ -324,6 +308,16 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error
 	return nil
 }
 
+func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
+	ipStr := strings.Join(ipList, ",")
+	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
+	_, err := tx.Exec(query, ipStr, email)
+	if err != nil {
+		return fmt.Errorf("error updating data: %v", err)
+	}
+	return nil
+}
+
 func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int, cfg *config.Config) {
 	matches := accessLogRegex.FindStringSubmatch(line)
 	if len(matches) != 4 {
@@ -350,7 +344,7 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 		}
 	}
 
-	if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
+	if err := UpdateIPInDB(tx, email, validIPs); err != nil {
 		log.Printf("Error updating IP in database: %v", err)
 	}
 
@@ -361,20 +355,10 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 }
 
 func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
+	log.Printf("Checking tables before reading new lines")
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
-
-	requiredTables := []string{"clients_stats", "dns_stats"}
-	for _, table := range requiredTables {
-		if !db.CheckTableExists(memDB, table) {
-			log.Printf("Table %s does not exist, reinitializing database", table)
-			if err := db.InitDB(memDB); err != nil {
-				log.Printf("Failed to reinitialize database: %v", err)
-				return
-			}
-			break
-		}
-	}
 
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
@@ -456,17 +440,6 @@ func initFile(cfg *config.Config) (memDB *sql.DB, accessLog, bannedLog *os.File,
 		}
 	}
 
-	requiredTables := []string{"clients_stats", "traffic_stats", "dns_stats"}
-	for _, table := range requiredTables {
-		if !db.CheckTableExists(memDB, table) {
-			log.Printf("Table %s is missing after initialization", table)
-			memDB.Close()
-			accessLog.Close()
-			bannedLog.Close()
-			return nil, nil, nil, nil, nil, fmt.Errorf("table %s is missing after initialization", table)
-		}
-	}
-
 	accessLog, err = os.OpenFile(cfg.AccessLogPath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		log.Printf("Error opening access.log: %v", err)
@@ -531,7 +504,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 					updateProxyStats(memDB, apiData)
 					updateClientStats(memDB, apiData, cfg)
 				}
-				readNewLines(memDB, accessLog, offset, cfg)
+				// readNewLines(memDB, accessLog, offset, cfg)
 			case <-ctx.Done():
 				return
 			}
