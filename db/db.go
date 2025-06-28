@@ -1059,25 +1059,42 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(10 * time.Minute)
+		log.Printf("[%s] Запуск MonitorSubscriptionsAndSync", time.Now().Format("2006/01/02 15:04:05"))
+		ticker := time.NewTicker(1 * time.Minute) // Изменено на 1 минуту
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
+				log.Printf("[%s] Начало цикла синхронизации", time.Now().Format("2006/01/02 15:04:05"))
 				if err := CleanInvalidTrafficTags(memDB, cfg); err != nil {
-					log.Printf("Error cleaning non-existent tags: %v", err)
+					log.Printf("[%s] Ошибка очистки несуществующих тегов: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 				}
 				CheckExpiredSubscriptions(memDB, cfg)
 
 				start := time.Now()
 				if err := SyncToFileDB(memDB, cfg); err != nil {
-					log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
+					log.Printf("[%s] Ошибка синхронизации базы данных: %v [%v]", time.Now().Format("2006/01/02 15:04:05"), err, time.Since(start))
 				} else {
-					log.Printf("Database synchronized successfully [%v]", time.Since(start))
+					log.Printf("[%s] База данных синхронизирована успешно [%v]", time.Now().Format("2006/01/02 15:04:05"), time.Since(start))
 				}
 			case <-ctx.Done():
+				log.Printf("[%s] Синхронизация базы данных завершена", time.Now().Format("2006/01/02 15:04:05"))
 				return
 			}
 		}
 	}()
+}
+
+// checkTableExists проверяет, существует ли таблица в базе данных
+func CheckTableExists(db *sql.DB, tableName string) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Ошибка при проверке существования таблицы %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
 }

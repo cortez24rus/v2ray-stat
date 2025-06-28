@@ -17,20 +17,6 @@ var (
 	dbMutex sync.Mutex
 )
 
-// checkTableExists проверяет, существует ли таблица в базе данных
-func CheckTableExists(db *sql.DB, tableName string) bool {
-	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false
-		}
-		log.Printf("Ошибка при проверке существования таблицы %s: %v", tableName, err)
-		return false
-	}
-	return name == tableName
-}
-
 // logExcessIPs логирует избыточные IP-адреса в файл
 func logExcessIPs(memDB *sql.DB, logFile *os.File, cfg *config.Config) error {
 	startTime := time.Now()
@@ -41,7 +27,7 @@ func logExcessIPs(memDB *sql.DB, logFile *os.File, cfg *config.Config) error {
 
 	// Проверка существования таблицы clients_stats
 	log.Printf("[%s] Проверка существования таблицы clients_stats", time.Now().Format("2006/01/02 15:04:05"))
-	if !CheckTableExists(memDB, "clients_stats") {
+	if !db.CheckTableExists(memDB, "clients_stats") {
 		log.Printf("[%s] Таблица clients_stats отсутствует, попытка переинициализации", time.Now().Format("2006/01/02 15:04:05"))
 		if err := db.InitDB(memDB); err != nil {
 			log.Printf("[%s] Ошибка переинициализации базы данных: %v", time.Now().Format("2006/01/02 15:04:05"), err)
@@ -77,7 +63,6 @@ func logExcessIPs(memDB *sql.DB, logFile *os.File, cfg *config.Config) error {
 		log.Printf("[%s] Обработка email: %s, lim_ip: %d, IPs: %s", time.Now().Format("2006/01/02 15:04:05"), email, ipLimit, ipAddresses)
 
 		if ipLimit == 0 {
-			log.Printf("[%s] Пропуск email %s: lim_ip равен 0", time.Now().Format("2006/01/02 15:04:05"), email)
 			continue
 		}
 

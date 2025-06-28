@@ -75,13 +75,28 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
+	startTime := time.Now()
+	log.Printf("[%s] Начало выполнения updateProxyStats", startTime.Format("2006/01/02 15:04:05"))
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	log.Printf("[%s] Проверка существования таблицы traffic_stats", time.Now().Format("2006/01/02 15:04:05"))
+	if !db.CheckTableExists(memDB, "traffic_stats") {
+		log.Printf("[%s] Таблица traffic_stats отсутствует, попытка переинициализации", time.Now().Format("2006/01/02 15:04:05"))
+		if err := db.InitDB(memDB); err != nil {
+			log.Printf("[%s] Ошибка переинициализации базы данных: %v", time.Now().Format("2006/01/02 15:04:05"), err)
+			return
+		}
+		log.Printf("[%s] База данных успешно переинициализирована", time.Now().Format("2006/01/02 15:04:05"))
+	}
+
 	currentStats := extractProxyTraffic(apiData)
+	log.Printf("[%s] Извлечено %d статистик прокси", time.Now().Format("2006/01/02 15:04:05"), len(currentStats))
 
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
+		log.Printf("[%s] Начальная статистика сохранена", time.Now().Format("2006/01/02 15:04:05"))
 	}
 
 	currentValues := make(map[string]int)
@@ -92,7 +107,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 		if len(parts) == 3 {
 			currentValues[parts[0]+" "+parts[1]] = stringToInt(parts[2])
 		} else {
-			log.Printf("Error: invalid line format: %s", line)
+			log.Printf("[%s] Ошибка: неверный формат строки статистики: %s", time.Now().Format("2006/01/02 15:04:05"), line)
 		}
 	}
 
@@ -115,7 +130,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 			previous = 0
 		}
 		diff := max(current-previous, 0)
-
 		parts := strings.Fields(key)
 		source := parts[0]
 		direction := parts[1]
@@ -143,25 +157,43 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	}
 
 	if queries != "" {
+		log.Printf("[%s] Выполнение транзакции для traffic_stats", time.Now().Format("2006/01/02 15:04:05"))
 		_, err := memDB.Exec(queries)
 		if err != nil {
-			log.Printf("Error executing transaction: %v", err)
+			log.Printf("[%s] Ошибка выполнения транзакции: %v", time.Now().Format("2006/01/02 15:04:05"), err)
+			return
 		}
 	} else {
-		log.Printf("Statistics not exist yet")
+		log.Printf("[%s] Статистика еще не существует", time.Now().Format("2006/01/02 15:04:05"))
 	}
 
 	previousStats = strings.Join(currentStats, "\n")
+	log.Printf("[%s] Завершение updateProxyStats, время выполнения: %v", time.Now().Format("2006/01/02 15:04:05"), time.Since(startTime))
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
+	startTime := time.Now()
+	log.Printf("[%s] Начало выполнения updateClientStats", startTime.Format("2006/01/02 15:04:05"))
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	log.Printf("[%s] Проверка существования таблицы clients_stats", time.Now().Format("2006/01/02 15:04:05"))
+	if !db.CheckTableExists(memDB, "clients_stats") {
+		log.Printf("[%s] Таблица clients_stats отсутствует, попытка переинициализации", time.Now().Format("2006/01/02 15:04:05"))
+		if err := db.InitDB(memDB); err != nil {
+			log.Printf("[%s] Ошибка переинициализации базы данных: %v", time.Now().Format("2006/01/02 15:04:05"), err)
+			return
+		}
+		log.Printf("[%s] База данных успешно переинициализирована", time.Now().Format("2006/01/02 15:04:05"))
+	}
+
 	clientCurrentStats := extractUserTraffic(apiData)
+	log.Printf("[%s] Извлечено %d статистик клиентов", time.Now().Format("2006/01/02 15:04:05"), len(clientCurrentStats))
 
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
+		log.Printf("[%s] Начальная статистика клиентов сохранена", time.Now().Format("2006/01/02 15:04:05"))
 		return
 	}
 
@@ -173,7 +205,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 		if len(parts) == 3 {
 			clientCurrentValues[parts[0]+" "+parts[1]] = stringToInt(parts[2])
 		} else {
-			log.Printf("Error: invalid line format: %s", line)
+			log.Printf("[%s] Ошибка: неверный формат строки статистики: %s", time.Now().Format("2006/01/02 15:04:05"), line)
 		}
 	}
 
@@ -196,7 +228,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 			previous = 0
 		}
 		diff := max(current-previous, 0)
-
 		parts := strings.Fields(key)
 		email := parts[0]
 		direction := parts[1]
@@ -254,9 +285,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 		downlinkOnline := max(sessDownlink-previousDownlink, 0)
 		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
 
-		// log.Printf("Traffic for email=%s: sessUplink=%d, previousUplink=%d, sessDownlink=%d, previousDownlink=%d, uplinkOnline=%d, downlinkOnline=%d, rate=%d (raw)",
-		// 	email, sessUplink, previousUplink, sessDownlink, previousDownlink, uplinkOnline, downlinkOnline, rate)
-
 		queries += fmt.Sprintf("INSERT OR REPLACE INTO clients_stats (email, rate, uplink, downlink, sess_uplink, sess_downlink) "+
 			"VALUES ('%s', '%d', %d, %d, %d, %d) ON CONFLICT(email) DO UPDATE SET "+
 			"rate = '%d', uplink = uplink + %d, downlink = downlink + %d, "+
@@ -266,15 +294,18 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 	}
 
 	if queries != "" {
+		log.Printf("[%s] Выполнение транзакции для clients_stats", time.Now().Format("2006/01/02 15:04:05"))
 		_, err := memDB.Exec(queries)
 		if err != nil {
-			log.Printf("Error executing transaction: %v", err)
+			log.Printf("[%s] Ошибка выполнения транзакции: %v", time.Now().Format("2006/01/02 15:04:05"), err)
+			return
 		}
 	} else {
-		log.Printf("Statistics not exist yet")
+		log.Printf("[%s] Статистика клиентов еще не существует", time.Now().Format("2006/01/02 15:04:05"))
 	}
 
 	clientPreviousStats = strings.Join(clientCurrentStats, "\n")
+	log.Printf("[%s] Завершение updateClientStats, время выполнения: %v", time.Now().Format("2006/01/02 15:04:05"), time.Since(startTime))
 }
 
 func stringToInt(s string) int {
@@ -345,48 +376,72 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 }
 
 func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
+	startTime := time.Now()
+	log.Printf("[%s] Начало выполнения readNewLines", startTime.Format("2006/01/02 15:04:05"))
+
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
+	// Проверка существования таблиц
+	requiredTables := []string{"clients_stats", "dns_stats"}
+	for _, table := range requiredTables {
+		log.Printf("[%s] Проверка существования таблицы %s", time.Now().Format("2006/01/02 15:04:05"), table)
+		if !db.CheckTableExists(memDB, table) {
+			log.Printf("[%s] Таблица %s отсутствует, попытка переинициализации", time.Now().Format("2006/01/02 15:04:05"), table)
+			if err := db.InitDB(memDB); err != nil {
+				log.Printf("[%s] Ошибка переинициализации базы данных для таблицы %s: %v", time.Now().Format("2006/01/02 15:04:05"), table, err)
+				return
+			}
+			log.Printf("[%s] База данных успешно переинициализирована для таблицы %s", time.Now().Format("2006/01/02 15:04:05"), table)
+		}
+	}
+
+	log.Printf("[%s] Установка позиции файла на offset %d", time.Now().Format("2006/01/02 15:04:05"), *offset)
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
+	log.Printf("[%s] Начало транзакции", time.Now().Format("2006/01/02 15:04:05"))
 	tx, err := memDB.Begin()
 	if err != nil {
-		log.Printf("Error starting transaction: %v", err)
+		log.Printf("[%s] Ошибка начала транзакции: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 		return
 	}
 
 	dnsStats := make(map[string]map[string]int)
 
+	log.Printf("[%s] Чтение строк из файла", time.Now().Format("2006/01/02 15:04:05"))
 	for scanner.Scan() {
+		log.Printf("[%s] Обработка строки лога", time.Now().Format("2006/01/02 15:04:05"))
 		processLogLine(tx, scanner.Text(), dnsStats, cfg)
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("Error reading file: %v", err)
+		log.Printf("[%s] Ошибка чтения файла: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 		tx.Rollback()
 		return
 	}
 
+	log.Printf("[%s] Обновление DNS-записей", time.Now().Format("2006/01/02 15:04:05"))
 	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
-		log.Printf("Error during batch update of DNS queries: %v", err)
+		log.Printf("[%s] Ошибка при пакетном обновлении DNS-записей: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 		tx.Rollback()
 		return
 	}
 
+	log.Printf("[%s] Фиксация транзакции", time.Now().Format("2006/01/02 15:04:05"))
 	if err := tx.Commit(); err != nil {
-		log.Printf("Error committing transaction: %v", err)
+		log.Printf("[%s] Ошибка фиксации транзакции: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 		tx.Rollback()
 		return
 	}
 
 	pos, err := file.Seek(0, 1)
 	if err != nil {
-		log.Printf("Error retrieving file position: %v", err)
+		log.Printf("[%s] Ошибка получения позиции файла: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 		return
 	}
 	*offset = pos
+	log.Printf("[%s] Завершение readNewLines, offset: %d, время выполнения: %v", time.Now().Format("2006/01/02 15:04:05"), *offset, time.Since(startTime))
 }
 
 // Инициализация базы данных
@@ -473,27 +528,35 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, accessLog *os.File,
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		log.Printf("[%s] Запуск monitorUsersAndLogs", time.Now().Format("2006/01/02 15:04:05"))
 		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
+				log.Printf("[%s] Начало цикла мониторинга пользователей и логов", time.Now().Format("2006/01/02 15:04:05"))
 				if err := db.AddUserToDB(memDB, cfg); err != nil {
-					log.Printf("Error adding users: %v", err)
+					log.Printf("[%s] Ошибка добавления пользователей: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 				}
 				if err := db.DelUserFromDB(memDB, cfg); err != nil {
-					log.Printf("Error deleting users: %v", err)
+					log.Printf("[%s] Ошибка удаления пользователей: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 				}
 
+				log.Printf("[%s] Получение данных API", time.Now().Format("2006/01/02 15:04:05"))
 				apiData, err := api.GetApiResponse(cfg)
 				if err != nil {
-					log.Printf("Error retrieving API data: %v", err)
+					log.Printf("[%s] Ошибка получения данных API: %v", time.Now().Format("2006/01/02 15:04:05"), err)
 				} else {
+					log.Printf("[%s] Обновление статистики прокси", time.Now().Format("2006/01/02 15:04:05"))
 					updateProxyStats(memDB, apiData)
+					log.Printf("[%s] Обновление статистики клиентов", time.Now().Format("2006/01/02 15:04:05"))
 					updateClientStats(memDB, apiData, cfg)
 				}
+				log.Printf("[%s] Чтение новых строк лога", time.Now().Format("2006/01/02 15:04:05"))
 				readNewLines(memDB, accessLog, offset, cfg)
+				log.Printf("[%s] Завершение цикла мониторинга", time.Now().Format("2006/01/02 15:04:05"))
 			case <-ctx.Done():
+				log.Printf("[%s] Мониторинг пользователей и логов завершен", time.Now().Format("2006/01/02 15:04:05"))
 				return
 			}
 		}
