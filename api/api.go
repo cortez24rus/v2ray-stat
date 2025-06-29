@@ -156,7 +156,8 @@ func buildNetworkStats(builder *strings.Builder) {
 		appendStats(builder, fmt.Sprintf("   tx: %s   %.0f p/s    %s\n\n", formatSpeed(txSpeed), txPacketsPerSec, stats.FormatTraffic(totalTxBytes)))
 	}
 }
-func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, mode string) {
+
+func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, mode, sortBy, sortOrder string) {
 	if memDB == nil {
 		log.Printf("Database not initialized in buildTrafficStats")
 		return
@@ -191,9 +192,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 			row := make([]string, len(columns))
 			for i, val := range values {
 				strVal := fmt.Sprintf("%v", val)
-				// Форматируем числовые колонки
 				if contains(trafficColumns, columns[i]) {
-					// Предполагаем, что значения числовые (int64)
 					if numVal, ok := val.(int64); ok {
 						isRate := columns[i] == "Rate"
 						strVal = formatTraffic(numVal, isRate)
@@ -274,24 +273,24 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	var trafficColsClients []string
 	switch mode {
 	case "minimal":
-		clientQuery = `
+		clientQuery = fmt.Sprintf(`
             SELECT email AS "Email", rate AS "Rate", uplink AS "Uplink", downlink AS "Downlink"
-            FROM clients_stats;
-        `
+            FROM clients_stats
+            ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "standard":
-		clientQuery = `
+		clientQuery = fmt.Sprintf(`
             SELECT email AS "Email", 
 				rate AS "Rate", 
 				sess_uplink AS "Sess Up", 
 				sess_downlink AS "Sess Down",
                 uplink AS "Uplink", 
 				downlink AS "Downlink"
-            FROM clients_stats;
-        `
+            FROM clients_stats
+			ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "extended":
-		clientQuery = `
+		clientQuery = fmt.Sprintf(`
             SELECT email AS "Email", 
 				rate AS "Rate", 
 				enabled AS "Enabled", 
@@ -303,8 +302,8 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 				downlink AS "Downlink", 
 				lim_ip AS "Lim", 
 				ips AS "Ips"
-            FROM clients_stats;
-        `
+            FROM clients_stats
+			ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
@@ -328,9 +327,36 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 			return
 		}
 
+		// Проверяем параметр mode
 		mode := r.URL.Query().Get("mode")
-		if mode != "minimal" && mode != "standard" && mode != "extended" {
-			mode = "minimal" // По умолчанию расширенный режим
+		validModes := []string{"minimal", "standard", "extended"}
+		if !contains(validModes, mode) {
+			if mode != "" {
+				http.Error(w, fmt.Sprintf("Invalid mode parameter: %s, must be one of %v", mode, validModes), http.StatusBadRequest)
+				return
+			}
+			mode = "minimal"
+		}
+
+		// Проверяем параметр sort_by
+		sortBy := r.URL.Query().Get("sort_by")
+		validSortColumns := []string{"email", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
+		if !contains(validSortColumns, sortBy) {
+			if sortBy != "" {
+				http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)
+				return
+			}
+			sortBy = "email"
+		}
+
+		// Проверяем параметр sort_order
+		sortOrder := r.URL.Query().Get("sort_order")
+		if sortOrder != "ASC" && sortOrder != "DESC" {
+			if sortOrder != "" {
+				http.Error(w, fmt.Sprintf("Invalid sort_order parameter: %s, must be ASC or DESC", sortOrder), http.StatusBadRequest)
+				return
+			}
+			sortOrder = "ASC"
 		}
 
 		var statsBuilder strings.Builder
@@ -341,7 +367,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 		if features["network"] {
 			buildNetworkStats(&statsBuilder)
 		}
-		buildTrafficStats(&statsBuilder, memDB, dbMutex, mode)
+		buildTrafficStats(&statsBuilder, memDB, dbMutex, mode, sortBy, sortOrder)
 
 		fmt.Fprintln(w, statsBuilder.String())
 	}

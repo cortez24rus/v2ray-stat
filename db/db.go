@@ -77,6 +77,29 @@ func InitDB(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("error executing SQL query: %v", err)
 	}
+
+	// Создание индексов для таблицы clients_stats
+	indexQueries := []string{
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_email ON clients_stats(email);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_renew ON clients_stats(renew);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_uplink ON clients_stats(sess_uplink);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_downlink ON clients_stats(sess_downlink);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_uplink ON clients_stats(uplink);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips);",
+	}
+
+	for _, indexQuery := range indexQueries {
+		_, err := db.Exec(indexQuery)
+		if err != nil {
+			return fmt.Errorf("error creating index: %v", err)
+		}
+	}
+
 	log.Printf("Database initialized successfully [%v]", time.Since(start))
 	return nil
 }
