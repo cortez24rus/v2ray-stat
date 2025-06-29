@@ -398,43 +398,19 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	*offset = pos
 }
 
-// Инициализация базы данных
-func initFile(cfg *config.Config) (memDB *sql.DB, err error) {
-	_, err = os.Stat(cfg.DatabasePath)
-	fileExists := !os.IsNotExist(err)
-
+func initFile() (memDB *sql.DB, err error) {
+	// Создаём базу данных в оперативной памяти
 	memDB, err = sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		log.Printf("Ошибка создания in-memory базы данных: %v", err)
 		return nil, fmt.Errorf("failed to create in-memory database: %v", err)
 	}
 
-	if fileExists {
-		fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
-		if err != nil {
-			log.Printf("Ошибка открытия базы данных: %v", err)
-			memDB.Close()
-			return nil, fmt.Errorf("failed to open database: %v", err)
-		}
-		defer fileDB.Close()
-
-		if err = db.InitDB(fileDB); err != nil {
-			log.Printf("Ошибка инициализации базы данных: %v", err)
-			memDB.Close()
-			return nil, fmt.Errorf("failed to initialize database: %v", err)
-		}
-
-		if err = db.BackupDB(fileDB, memDB, cfg); err != nil {
-			log.Printf("Ошибка копирования данных в память: %v", err)
-			memDB.Close()
-			return nil, fmt.Errorf("failed to copy data to memory: %v", err)
-		}
-	} else {
-		if err = db.InitDB(memDB); err != nil {
-			log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
-			memDB.Close()
-			return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
-		}
+	// Инициализируем структуру базы данных
+	if err = db.InitDB(memDB); err != nil {
+		log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
+		memDB.Close()
+		return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
 	}
 
 	return memDB, nil
@@ -558,15 +534,11 @@ func main() {
 	}
 
 	// Инициализация базы данных и логов
-	memDB, err := initFile(&cfg)
+	memDB, err := initFile()
 	if err != nil {
 		log.Fatalf("Failed to initialize file: %v", err)
 	}
 	defer memDB.Close()
-
-	//if err := db.SyncToFileDB(memDB, &cfg); err != nil {
-	//	log.Printf("Ошибка начальной синхронизации базы данных: %v", err)
-	//}
 
 	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
 
@@ -610,7 +582,7 @@ func main() {
 	if err := db.SyncToFileDB(memDB, &cfg); err != nil {
 		log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
 	} else {
-		log.Printf("Database synchronized successfully [%v]", time.Since(start))
+		log.Printf("Database synchronized successfully to %s [%v]", cfg.DatabasePath, time.Since(start))
 	}
 
 	wg.Wait()
