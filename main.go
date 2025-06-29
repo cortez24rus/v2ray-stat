@@ -265,12 +265,10 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 		downlinkOnline := max(sessDownlink-previousDownlink, 0)
 		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
 
-		queries += fmt.Sprintf("INSERT OR REPLACE INTO clients_stats (email, rate, uplink, downlink, sess_uplink, sess_downlink) "+
-			"VALUES ('%s', '%d', %d, %d, %d, %d) ON CONFLICT(email) DO UPDATE SET "+
-			"rate = '%d', uplink = uplink + %d, downlink = downlink + %d, "+
-			"sess_uplink = %d, sess_downlink = %d;\n",
-			email, rate, uplink, downlink, sessUplink, sessDownlink,
-			rate, uplink, downlink, sessUplink, sessDownlink)
+		queries += fmt.Sprintf("UPDATE clients_stats SET "+
+			"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
+			"sess_uplink = %d, sess_downlink = %d WHERE email = '%s';\n",
+			rate, uplink, downlink, sessUplink, sessDownlink, email)
 	}
 
 	if queries != "" {
