@@ -20,8 +20,6 @@ var (
 
 // MonitorBannedLog читает новые записи из файла banned.log и отправляет уведомления в Telegram.
 func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) error {
-	log.Println("Начало MonitorBanned")
-
 	bannedLog.Seek(*bannedOffset, 0)
 	scanner := bufio.NewScanner(bannedLog)
 
@@ -75,7 +73,6 @@ func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) 
 	}
 	*bannedOffset = pos
 
-	log.Println("MonitorBanned завершён успешно")
 	return nil
 }
 

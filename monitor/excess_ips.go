@@ -12,22 +12,13 @@ import (
 	"v2ray-stat/config"
 )
 
-var (
-	dbMutex sync.Mutex
-)
-
 // logExcessIPs логирует избыточные IP-адреса в файл
-func logExcessIPs(memDB *sql.DB, logFile *os.File) error {
-	log.Println("Начало logExcessIPs")
-	dbMutex.Lock()
-	log.Println("Мьютекс захвачен в logExcessIPs")
-	defer func() {
-		dbMutex.Unlock()
-		log.Println("Мьютекс освобождён в logExcessIPs")
-	}()
-
+func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 	currentTime := time.Now().Format("2006/01/02 15:04:05")
+
+	dbMutex.Lock()
 	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
+	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Ошибка при запросе к таблице clients_stats: %v", err)
 		return fmt.Errorf("ошибка при запросе к базе данных: %v", err)
@@ -80,7 +71,7 @@ func logExcessIPs(memDB *sql.DB, logFile *os.File) error {
 }
 
 // MonitorExcessIPs запускает задачу мониторинга избыточных IP
-func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -98,7 +89,7 @@ func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg
 		for {
 			select {
 			case <-ticker.C:
-				if err := logExcessIPs(memDB, logFile); err != nil {
+				if err := logExcessIPs(memDB, dbMutex, logFile); err != nil {
 					log.Printf("Ошибка при логировании IP: %v", err)
 				}
 			case <-ctx.Done():

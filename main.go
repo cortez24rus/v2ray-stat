@@ -75,8 +75,6 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
-	log.Println("Начало updateProxyStats")
-
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -141,8 +139,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 	}
 
 	if queries != "" {
-		log.Printf("Выполнение SQL в updateProxyStats: %s", queries)
-
 		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
 		dbMutex.Unlock()
@@ -150,14 +146,11 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
 			return
 		}
-		log.Println("SQL в updateProxyStats выполнен успешно")
 	}
 	previousStats = strings.Join(currentStats, "\n")
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
-	log.Println("Начало updateClientStats")
-
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
@@ -259,8 +252,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	}
 
 	if queries != "" {
-		log.Printf("Выполнение SQL в updateClientStats: %s", queries)
-
 		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
 		dbMutex.Unlock()
@@ -268,7 +259,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
 			return
 		}
-		log.Println("SQL в updateClientStats выполнен успешно")
 	}
 
 	clientPreviousStats = strings.Join(clientCurrentStats, "\n")
@@ -339,8 +329,6 @@ func processLogLine(tx *sql.Tx, dbMutex *sync.Mutex, line string, dnsStats map[s
 }
 
 func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int64, cfg *config.Config) {
-	log.Println("Начало readNewLines")
-
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
@@ -381,7 +369,6 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 		return
 	}
 	*offset = pos
-	log.Printf("Позиция файла обновлена в readNewLines: %d", pos)
 }
 
 // Запуск задачи мониторинга пользователей и логов
@@ -525,7 +512,7 @@ func main() {
 
 	monitorUsersAndLogs(ctx, memDB, &dbMutex, &cfg, &wg)
 	db.MonitorSubscriptionsAndSync(ctx, memDB, &dbMutex, &cfg, &wg)
-	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
+	monitor.MonitorExcessIPs(ctx, memDB, &dbMutex, &cfg, &wg)
 	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
 	if cfg.Features["network"] {
