@@ -20,6 +20,7 @@ import (
 	"v2ray-stat/config"
 	"v2ray-stat/constant"
 	"v2ray-stat/db"
+	"v2ray-stat/monitor"
 	"v2ray-stat/stats"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -558,8 +559,8 @@ func main() {
 	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
 	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	db.MonitorDatabaseIntegrity(ctx, memDB, &wg)
-	//monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
-	//monitor.MonitorBannedLog(ctx, &cfg, &wg)
+	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
+	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
 	if cfg.Features["network"] {
 		if err := stats.InitNetworkMonitoring(); err != nil {

@@ -18,8 +18,13 @@ var (
 
 // logExcessIPs логирует избыточные IP-адреса в файл
 func logExcessIPs(memDB *sql.DB, logFile *os.File) error {
+	log.Println("Начало logExcessIPs")
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
+	log.Println("Мьютекс захвачен в logExcessIPs")
+	defer func() {
+		dbMutex.Unlock()
+		log.Println("Мьютекс освобождён в logExcessIPs")
+	}()
 
 	currentTime := time.Now().Format("2006/01/02 15:04:05")
 	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
@@ -70,6 +75,7 @@ func logExcessIPs(memDB *sql.DB, logFile *os.File) error {
 		return fmt.Errorf("ошибка при обработке строк: %v", err)
 	}
 
+	log.Println("logExcessIPs завершён успешно")
 	return nil
 }
 
