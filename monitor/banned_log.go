@@ -100,7 +100,7 @@ func MonitorBannedLog(ctx context.Context, cfg *config.Config, wg *sync.WaitGrou
 			return
 		}
 
-		ticker := time.NewTicker(10 * time.Second) // Используем тот же интервал, что и в monitorUsersAndLogs
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 
 		for {

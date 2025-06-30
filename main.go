@@ -277,13 +277,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 	}
 
 	if queries != "" {
-		if _, err := memDB.Exec(queries); err != nil {
-			log.Printf("Ошибка выполнения транзакции: %v", err)
-			return
-		}
-	}
-
-	if queries != "" {
 		log.Printf("Выполнение SQL в updateClientStats: %s", queries)
 		if _, err := memDB.Exec(queries); err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
