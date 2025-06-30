@@ -376,9 +376,13 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
-	// Блокировка мьютекса
+	log.Println("Начало синхронизации базы данных")
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
+	log.Println("Мьютекс захвачен в SyncToFileDB")
+	defer func() {
+		dbMutex.Unlock()
+		log.Println("Мьютекс освобождён в SyncToFileDB")
+	}()
 
 	// Открытие файловой базы данных
 	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
@@ -439,9 +443,11 @@ func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
 		})
 	})
 	if err != nil {
-		return fmt.Errorf("ошибка во время резервного копирования: %v", err)
+		log.Printf("Ошибка синхронизации: %v", err)
+		return fmt.Errorf("ошибка синхронизации: %v", err)
 	}
 
+	log.Println("Синхронизация завершена успешно")
 	return nil
 }
 

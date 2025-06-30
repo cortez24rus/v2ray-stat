@@ -20,7 +20,6 @@ import (
 	"v2ray-stat/config"
 	"v2ray-stat/constant"
 	"v2ray-stat/db"
-	"v2ray-stat/monitor"
 	"v2ray-stat/stats"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -160,8 +159,13 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
+	log.Println("Начало updateClientStats")
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
+	log.Println("Мьютекс захвачен в updateClientStats")
+	defer func() {
+		dbMutex.Unlock()
+		log.Println("Мьютекс освобождён в updateClientStats")
+	}()
 
 	if !db.CheckTableExists(memDB, "clients_stats") {
 		log.Printf("Таблица clients_stats отсутствует, попытка переинициализации")
@@ -278,6 +282,15 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 		}
 	}
 
+	if queries != "" {
+		log.Printf("Выполнение SQL в updateClientStats: %s", queries)
+		if _, err := memDB.Exec(queries); err != nil {
+			log.Printf("Ошибка SQL в updateClientStats: %v", err)
+			return
+		}
+		log.Println("SQL в updateClientStats выполнен успешно")
+	}
+
 	clientPreviousStats = strings.Join(clientCurrentStats, "\n")
 }
 
@@ -344,8 +357,13 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 }
 
 func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
+	log.Println("Начало readNewLines")
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
+	log.Println("Мьютекс захвачен в readNewLines")
+	defer func() {
+		dbMutex.Unlock()
+		log.Println("Мьютекс освобождён в readNewLines")
+	}()
 
 	// Проверка существования таблиц
 	for _, table := range []string{"clients_stats", "dns_stats"} {
@@ -355,6 +373,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 				log.Printf("Ошибка переинициализации базы данных для таблицы %s: %v", table, err)
 				return
 			}
+			log.Printf("Переинициализация для таблицы %s успешна", table)
 		}
 	}
 
@@ -396,6 +415,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 		return
 	}
 	*offset = pos
+	log.Printf("Позиция файла обновлена в readNewLines: %d", pos)
 }
 
 // Запуск задачи мониторинга пользователей и логов
@@ -538,8 +558,8 @@ func main() {
 	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
 	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	db.MonitorDatabaseIntegrity(ctx, memDB, &wg)
-	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
-	monitor.MonitorBannedLog(ctx, &cfg, &wg)
+	//monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
+	//monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
 	if cfg.Features["network"] {
 		if err := stats.InitNetworkMonitoring(); err != nil {
