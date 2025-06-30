@@ -75,6 +75,9 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -139,9 +142,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 	}
 
 	if queries != "" {
-		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
 			return
@@ -151,6 +152,9 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
@@ -252,9 +256,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	}
 
 	if queries != "" {
-		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
 			return
