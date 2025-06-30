@@ -78,14 +78,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	if !db.CheckTableExists(memDB, "traffic_stats") {
-		log.Printf("Таблица traffic_stats отсутствует, попытка переинициализации")
-		if err := db.InitDB(memDB); err != nil {
-			log.Printf("Ошибка переинициализации базы данных: %v", err)
-			return
-		}
-	}
-
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -167,14 +159,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 		dbMutex.Unlock()
 		log.Println("Мьютекс освобождён в updateClientStats")
 	}()
-
-	if !db.CheckTableExists(memDB, "clients_stats") {
-		log.Printf("Таблица clients_stats отсутствует, попытка переинициализации")
-		if err := db.InitDB(memDB); err != nil {
-			log.Printf("Ошибка переинициализации базы данных: %v", err)
-			return
-		}
-	}
 
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
@@ -359,18 +343,6 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 		log.Println("Мьютекс освобождён в readNewLines")
 	}()
 
-	// Проверка существования таблиц
-	for _, table := range []string{"clients_stats", "dns_stats"} {
-		if !db.CheckTableExists(memDB, table) {
-			log.Printf("Таблица %s отсутствует, попытка переинициализации", table)
-			if err := db.InitDB(memDB); err != nil {
-				log.Printf("Ошибка переинициализации базы данных для таблицы %s: %v", table, err)
-				return
-			}
-			log.Printf("Переинициализация для таблицы %s успешна", table)
-		}
-	}
-
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
@@ -487,8 +459,8 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *
 	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, &dbMutex, cfg.Services, cfg.Features))
 
 	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(memDB, &dbMutex, cfg))
+	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(cfg))
+	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(cfg))
 	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, cfg))
 
 	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, &dbMutex))
@@ -532,7 +504,7 @@ func main() {
 	// Инициализация базы данных
 	memDB, err := db.InitDatabase()
 	if err != nil {
-		log.Fatalf("Failed to initialize file: %v", err)
+		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer memDB.Close()
 
@@ -551,7 +523,6 @@ func main() {
 
 	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
 	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
-	db.MonitorDatabaseIntegrity(ctx, memDB, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
 	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
@@ -575,11 +546,17 @@ func main() {
 	cancel()
 
 	// Synchronize database
-	start := time.Now()
-	if err := db.SyncToFileDB(memDB, &cfg); err != nil {
-		log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
+	fileDB, err := db.InitializeFileDB(&cfg)
+	if err != nil {
+		log.Printf("Error initializing file database: %v", err)
 	} else {
-		log.Printf("Database synchronized successfully to %s [%v]", cfg.DatabasePath, time.Since(start))
+		defer fileDB.Close()
+		start := time.Now()
+		if err := db.SyncToFileDB(memDB, fileDB); err != nil {
+			log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
+		} else {
+			log.Printf("Database synchronized successfully to %s [%v]", cfg.DatabasePath, time.Since(start))
+		}
 	}
 
 	wg.Wait()
