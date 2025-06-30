@@ -536,7 +536,7 @@ func main() {
 	go startAPIServer(ctx, memDB, &cfg, &wg)
 
 	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
-	// db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
+	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
 	db.MonitorDatabaseIntegrity(ctx, memDB, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
 	monitor.MonitorBannedLog(ctx, &cfg, &wg)

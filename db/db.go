@@ -1094,10 +1094,10 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 		for {
 			select {
 			case <-ticker.C:
-				if err := CleanInvalidTrafficTags(memDB, cfg); err != nil {
-					log.Printf("Error cleaning non-existent tags: %v", err)
-				}
-				CheckExpiredSubscriptions(memDB, cfg)
+				// if err := CleanInvalidTrafficTags(memDB, cfg); err != nil {
+				// 	log.Printf("Error cleaning non-existent tags: %v", err)
+				// }
+				// CheckExpiredSubscriptions(memDB, cfg)
 
 				start := time.Now()
 				if err := SyncToFileDB(memDB, cfg); err != nil {
