@@ -1070,6 +1070,20 @@ func InitDatabase() (memDB *sql.DB, err error) {
 	return memDB, nil
 }
 
+// checkTableExists проверяет, существует ли таблица в базе данных
+func CheckTableExists(db *sql.DB, tableName string) bool {
+	var name string
+	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Printf("Ошибка при проверке существования таблицы %s: %v", tableName, err)
+		return false
+	}
+	return name == tableName
+}
+
 // Запуск задачи синхронизации базы и проверки подписок
 func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
@@ -1098,16 +1112,41 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 	}()
 }
 
-// checkTableExists проверяет, существует ли таблица в базе данных
-func CheckTableExists(db *sql.DB, tableName string) bool {
-	var name string
-	err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&name)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return false
+func CheckDatabaseIntegrity(db *sql.DB) error {
+	start := time.Now()
+	tables := []string{"clients_stats", "traffic_stats", "dns_stats"}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	for _, table := range tables {
+		if !CheckTableExists(db, table) {
+			log.Printf("Ошибка целостности базы данных: таблица %s отсутствует", table)
+			return fmt.Errorf("таблица %s отсутствует в базе данных", table)
 		}
-		log.Printf("Ошибка при проверке существования таблицы %s: %v", tableName, err)
-		return false
 	}
-	return name == tableName
+
+	log.Printf("Проверка целостности базы данных завершена успешно [%v]", time.Since(start))
+	return nil
+}
+
+func MonitorDatabaseIntegrity(ctx context.Context, memDB *sql.DB, wg *sync.WaitGroup) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(20 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := CheckDatabaseIntegrity(memDB); err != nil {
+					log.Printf("Ошибка проверки целостности базы данных: %v", err)
+				}
+			case <-ctx.Done():
+				log.Println("Остановка мониторинга целостности базы данных")
+				return
+			}
+		}
+	}()
 }
