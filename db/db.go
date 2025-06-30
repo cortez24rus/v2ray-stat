@@ -376,95 +376,70 @@ func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 }
 
 func SyncToFileDB(memDB *sql.DB, cfg *config.Config) error {
+	// Блокировка мьютекса
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	// Открытие или создание файла базы данных SQLite (файл создаётся автоматически, если не существует)
+	// Открытие файловой базы данных
 	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
 	if err != nil {
 		return fmt.Errorf("failed to open file database at %s: %v", cfg.DatabasePath, err)
 	}
 	defer fileDB.Close()
 
-	// Проверка необходимости инициализации базы данных
-	var tableCount int
-	err = fileDB.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table'").Scan(&tableCount)
-	if err != nil {
-		return fmt.Errorf("failed to check database schema: %v", err)
-	}
-	if tableCount == 0 {
+	// Проверка и инициализация таблиц
+	if !CheckTableExists(fileDB, "clients_stats") {
 		if err := InitDB(fileDB); err != nil {
-			return fmt.Errorf("failed to initialize file database: %v", err)
+			return fmt.Errorf("ошибка инициализации базы данных: %v", err)
 		}
 	}
 
-	// Начало транзакции для атомарного обновления данных
-	tx, err := fileDB.Begin()
+	// Получение соединений
+	memConn, err := memDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("failed to start transaction: %v", err)
+		return fmt.Errorf("ошибка получения соединения с базой в памяти: %v", err)
 	}
+	defer memConn.Close()
 
-	// Список таблиц для синхронизации
-	tables := []string{"clients_stats", "traffic_stats", "dns_stats"}
-	for _, table := range tables {
-		// Очистка таблицы в fileDB
-		_, err = tx.Exec(fmt.Sprintf("DELETE FROM %s", table))
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to clear table %s: %v", table, err)
-		}
+	fileConn, err := fileDB.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("ошибка получения соединения с файловой базой: %v", err)
+	}
+	defer fileConn.Close()
 
-		// Выборка всех данных из memDB
-		rows, err := memDB.Query(fmt.Sprintf("SELECT * FROM %s", table))
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to query table %s from memDB: %v", table, err)
-		}
-		defer rows.Close()
-
-		// Получение структуры таблицы
-		columns, err := rows.Columns()
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to get columns for table %s: %v", table, err)
-		}
-
-		// Подготовка параметризованного запроса для вставки
-		placeholders := make([]string, len(columns))
-		for i := range placeholders {
-			placeholders[i] = "?"
-		}
-		insertQuery := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-			table, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
-		stmt, err := tx.Prepare(insertQuery)
-		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("failed to prepare insert statement for table %s: %v", table, err)
-		}
-		defer stmt.Close()
-
-		// Вставка данных построчно
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
-		for i := range values {
-			valuePtrs[i] = &values[i]
-		}
-		for rows.Next() {
-			if err := rows.Scan(valuePtrs...); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("failed to scan row from table %s: %v", table, err)
+	// Резервное копирование через SQLite Backup API
+	err = memConn.Raw(func(memDriverConn any) error {
+		return fileConn.Raw(func(fileDriverConn any) error {
+			// Приводим соединения к типу *sqlite3.SQLiteConn
+			memConnSQLite, ok := memDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("не удалось привести соединение с базой в памяти к *sqlite3.SQLiteConn")
 			}
-			_, err = stmt.Exec(values...)
+			fileConnSQLite, ok := fileDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("не удалось привести соединение с файловой базой к *sqlite3.SQLiteConn")
+			}
+
+			// Инициализируем резервное копирование из memDB в fileDB
+			backup, err := fileConnSQLite.Backup("main", memConnSQLite, "main")
 			if err != nil {
-				tx.Rollback()
-				return fmt.Errorf("failed to insert row into table %s: %v", table, err)
+				return fmt.Errorf("ошибка инициализации резервного копирования: %v", err)
 			}
-		}
-	}
+			defer backup.Finish()
 
-	// Фиксация транзакции
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %v", err)
+			// Копируем все страницы за один шаг
+			done, err := backup.Step(-1)
+			if err != nil {
+				return fmt.Errorf("ошибка выполнения резервного копирования: %v", err)
+			}
+			if !done {
+				return fmt.Errorf("резервное копирование не завершено")
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("ошибка во время резервного копирования: %v", err)
 	}
 
 	return nil
@@ -1075,6 +1050,24 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 		}
 	}
 	return false
+}
+
+func InitDatabase() (memDB *sql.DB, err error) {
+	// Создаём базу данных в оперативной памяти
+	memDB, err = sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		log.Printf("Ошибка создания in-memory базы данных: %v", err)
+		return nil, fmt.Errorf("failed to create in-memory database: %v", err)
+	}
+
+	// Инициализируем структуру базы данных
+	if err = InitDB(memDB); err != nil {
+		log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
+		memDB.Close()
+		return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
+	}
+
+	return memDB, nil
 }
 
 // Запуск задачи синхронизации базы и проверки подписок

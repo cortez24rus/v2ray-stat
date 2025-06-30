@@ -398,24 +398,6 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	*offset = pos
 }
 
-func initFile() (memDB *sql.DB, err error) {
-	// Создаём базу данных в оперативной памяти
-	memDB, err = sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		log.Printf("Ошибка создания in-memory базы данных: %v", err)
-		return nil, fmt.Errorf("failed to create in-memory database: %v", err)
-	}
-
-	// Инициализируем структуру базы данных
-	if err = db.InitDB(memDB); err != nil {
-		log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
-		memDB.Close()
-		return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
-	}
-
-	return memDB, nil
-}
-
 // Запуск задачи мониторинга пользователей и логов
 func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
@@ -533,14 +515,12 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	// Инициализация базы данных и логов
-	memDB, err := initFile()
+	// Инициализация базы данных
+	memDB, err := db.InitDatabase()
 	if err != nil {
 		log.Fatalf("Failed to initialize file: %v", err)
 	}
 	defer memDB.Close()
-
-	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
 
 	// Setup context and signals
 	ctx, cancel := context.WithCancel(context.Background())
@@ -571,6 +551,8 @@ func main() {
 		stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
 		stats.MonitorStats(ctx, &cfg, &wg)
 	}
+
+	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
 
 	// Wait for termination signal
 	<-sigChan

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 	"v2ray-stat/config"
-	"v2ray-stat/db"
 )
 
 var (
@@ -21,15 +20,6 @@ var (
 func logExcessIPs(memDB *sql.DB, logFile *os.File) error {
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
-
-	// Проверка существования таблицы clients_stats
-	if !db.CheckTableExists(memDB, "clients_stats") {
-		log.Printf("Таблица clients_stats отсутствует, попытка переинициализации")
-		if err := db.InitDB(memDB); err != nil {
-			log.Printf("Ошибка переинициализации базы данных: %v", err)
-			return fmt.Errorf("не удалось переинициализировать базу данных: %v", err)
-		}
-	}
 
 	currentTime := time.Now().Format("2006/01/02 15:04:05")
 	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
