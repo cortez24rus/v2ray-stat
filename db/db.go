@@ -21,7 +21,6 @@ import (
 )
 
 var (
-	dbMutex            sync.Mutex
 	notifiedMutex      sync.Mutex
 	notifiedUsers      = make(map[string]bool)
 	renewNotifiedUsers = make(map[string]bool)
@@ -175,7 +174,7 @@ func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
 	return clients
 }
 
-func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
+func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	var clients []config.XrayClient
 	switch cfg.CoreType {
 	case "xray":
@@ -239,7 +238,7 @@ func AddUserToDB(memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func DelUserFromDB(memDB *sql.DB, cfg *config.Config) error {
+func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	var clients []config.XrayClient
 	switch cfg.CoreType {
 	case "xray":
@@ -298,17 +297,19 @@ func DelUserFromDB(memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
+func UpdateIPInDB(tx *sql.Tx, dbMutex *sync.Mutex, email string, ipList []string) error {
 	ipStr := strings.Join(ipList, ",")
 	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
+	dbMutex.Lock()
 	_, err := tx.Exec(query, ipStr, email)
+	dbMutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("error updating data: %v", err)
 	}
 	return nil
 }
 
-func UpdateEnabledInDB(memDB *sql.DB, email string, enabled bool) {
+func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, email string, enabled bool) {
 	enabledStr := "false"
 	if enabled {
 		enabledStr = "true"
@@ -362,7 +363,7 @@ func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
 	return newDate, nil
 }
 
-func AdjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) error {
+func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, baseDate time.Time) error {
 	start := time.Now()
 	offset = strings.TrimSpace(offset)
 
@@ -393,12 +394,12 @@ func AdjustDateOffset(memDB *sql.DB, email, offset string, baseDate time.Time) e
 	return nil
 }
 
-func CheckExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
+func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) {
 	start := time.Now()
 
 	dbMutex.Lock()
 	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
-	defer dbMutex.Unlock()
+	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error querying database: %v", err)
 		return
@@ -454,7 +455,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
 
 				if s.Renew >= 1 {
 					offset := fmt.Sprintf("%d", s.Renew)
-					err = AdjustDateOffset(memDB, s.Email, offset, start)
+					err = AdjustDateOffset(memDB, dbMutex, s.Email, offset, start)
 					if err != nil {
 						log.Printf("Error renewing subscription for %s: %v", s.Email, err)
 						continue
@@ -476,31 +477,31 @@ func CheckExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
 					notifiedMutex.Unlock()
 
 					if s.Enabled == "false" {
-						err = ToggleUserEnabled(s.Email, true, cfg, memDB)
+						err = ToggleUserEnabled(s.Email, true, cfg, memDB, dbMutex)
 						if err != nil {
 							log.Printf("Error enabling user %s: %v", s.Email, err)
 							continue
 						}
-						UpdateEnabledInDB(memDB, s.Email, true)
+						UpdateEnabledInDB(memDB, dbMutex, s.Email, true)
 						log.Printf("User %s enabled", s.Email)
 					}
 				} else if s.Enabled == "true" {
-					err = ToggleUserEnabled(s.Email, false, cfg, memDB)
+					err = ToggleUserEnabled(s.Email, false, cfg, memDB, dbMutex)
 					if err != nil {
 						log.Printf("Error disabling user %s: %v", s.Email, err)
 					} else {
 						log.Printf("User %s disabled", s.Email)
 					}
-					UpdateEnabledInDB(memDB, s.Email, false)
+					UpdateEnabledInDB(memDB, dbMutex, s.Email, false)
 				}
 			} else {
 				if s.Enabled == "false" {
-					err = ToggleUserEnabled(s.Email, true, cfg, memDB)
+					err = ToggleUserEnabled(s.Email, true, cfg, memDB, dbMutex)
 					if err != nil {
 						log.Printf("Error enabling user %s: %v", s.Email, err)
 						continue
 					}
-					UpdateEnabledInDB(memDB, s.Email, true)
+					UpdateEnabledInDB(memDB, dbMutex, s.Email, true)
 					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.Email, s.SubEnd)
 				}
 			}
@@ -508,7 +509,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, cfg *config.Config) {
 	}
 }
 
-func CleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
+func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	// Получаем все теги из traffic_stats
 	rows, err := memDB.Query("SELECT source FROM traffic_stats")
 	if err != nil {
@@ -600,7 +601,7 @@ func CleanInvalidTrafficTags(memDB *sql.DB, cfg *config.Config) error {
 	return nil
 }
 
-func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB) error {
+func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB, dbMutex *sync.Mutex) error {
 	start := time.Now()
 
 	mainConfigPath := cfg.CoreConfig
@@ -897,7 +898,7 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 		}
 	}
 
-	UpdateEnabledInDB(memDB, userIdentifier, enabled)
+	UpdateEnabledInDB(memDB, dbMutex, userIdentifier, enabled)
 	return nil
 }
 
@@ -992,7 +993,7 @@ func InitDB(db *sql.DB) error {
 	return nil
 }
 
-func SyncToFileDB(memDB, fileDB *sql.DB) error {
+func SyncToFileDB(memDB, fileDB *sql.DB, dbMutex *sync.Mutex) error {
 	log.Println("Начало синхронизации базы данных")
 
 	// Получение соединений
@@ -1095,12 +1096,11 @@ func InitializeFileDB(cfg *config.Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("error initializing file database: %v", err)
 	}
 
-	log.Printf("File database initialized successfully at %s", cfg.DatabasePath)
 	return fileDB, nil
 }
 
 // Запуск задачи синхронизации базы и проверки подписок
-func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1118,13 +1118,13 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, cfg *config
 		for {
 			select {
 			case <-ticker.C:
-				if err := CleanInvalidTrafficTags(memDB, cfg); err != nil {
+				if err := CleanInvalidTrafficTags(memDB, dbMutex, cfg); err != nil {
 					log.Printf("Error cleaning non-existent tags: %v", err)
 				}
-				CheckExpiredSubscriptions(memDB, cfg)
+				CheckExpiredSubscriptions(memDB, dbMutex, cfg)
 
 				start := time.Now()
-				if err := SyncToFileDB(memDB, fileDB); err != nil {
+				if err := SyncToFileDB(memDB, fileDB, dbMutex); err != nil {
 					log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
 				} else {
 					log.Printf("Database synchronized successfully [%v]", time.Since(start))

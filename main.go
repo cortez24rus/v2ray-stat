@@ -29,7 +29,7 @@ import (
 var (
 	uniqueEntries       = make(map[string]map[string]time.Time)
 	uniqueEntriesMutex  sync.Mutex
-	dbMutex             sync.Mutex
+	fileMutex           sync.Mutex
 	previousStats       string
 	clientPreviousStats string
 )
@@ -74,9 +74,8 @@ func splitAndCleanName(name string) []string {
 	return nil
 }
 
-func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
+func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
+	log.Println("Начало updateProxyStats")
 
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
@@ -142,23 +141,22 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse) {
 	}
 
 	if queries != "" {
-		if _, err := memDB.Exec(queries); err != nil {
-			log.Printf("Ошибка выполнения транзакции: %v", err)
+		log.Printf("Выполнение SQL в updateProxyStats: %s", queries)
+
+		dbMutex.Lock()
+		_, err := memDB.Exec(queries)
+		dbMutex.Unlock()
+		if err != nil {
+			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
 			return
 		}
+		log.Println("SQL в updateProxyStats выполнен успешно")
 	}
-
 	previousStats = strings.Join(currentStats, "\n")
 }
 
-func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Config) {
+func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
 	log.Println("Начало updateClientStats")
-	dbMutex.Lock()
-	log.Println("Мьютекс захвачен в updateClientStats")
-	defer func() {
-		dbMutex.Unlock()
-		log.Println("Мьютекс освобождён в updateClientStats")
-	}()
 
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
@@ -262,7 +260,11 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, cfg *config.Conf
 
 	if queries != "" {
 		log.Printf("Выполнение SQL в updateClientStats: %s", queries)
-		if _, err := memDB.Exec(queries); err != nil {
+
+		dbMutex.Lock()
+		_, err := memDB.Exec(queries)
+		dbMutex.Unlock()
+		if err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
 			return
 		}
@@ -281,14 +283,16 @@ func stringToInt(s string) int {
 	return result
 }
 
-func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error {
+func upsertDNSRecordsBatch(tx *sql.Tx, dbMutex *sync.Mutex, dnsStats map[string]map[string]int) error {
 	for email, domains := range dnsStats {
 		for domain, count := range domains {
+			dbMutex.Lock()
 			_, err := tx.Exec(`
                 INSERT INTO dns_stats (email, domain, count) 
                 VALUES (?, ?, ?)
                 ON CONFLICT(email, domain) 
                 DO UPDATE SET count = count + ?`, email, domain, count, count)
+			dbMutex.Unlock()
 			if err != nil {
 				log.Printf("Ошибка при пакетном обновлении dns_stats: %v", err)
 				return fmt.Errorf("error during batch update of dns_stats: %v", err)
@@ -298,7 +302,7 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error
 	return nil
 }
 
-func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int, cfg *config.Config) {
+func processLogLine(tx *sql.Tx, dbMutex *sync.Mutex, line string, dnsStats map[string]map[string]int, cfg *config.Config) {
 	matches := accessLogRegex.FindStringSubmatch(line)
 	if len(matches) != 4 {
 		return
@@ -324,7 +328,7 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 		}
 	}
 
-	if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
+	if err := db.UpdateIPInDB(tx, dbMutex, email, validIPs); err != nil {
 		log.Printf("Error updating IP in database: %v", err)
 	}
 
@@ -334,19 +338,15 @@ func processLogLine(tx *sql.Tx, line string, dnsStats map[string]map[string]int,
 	dnsStats[email][domain]++
 }
 
-func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Config) {
+func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int64, cfg *config.Config) {
 	log.Println("Начало readNewLines")
-	dbMutex.Lock()
-	log.Println("Мьютекс захвачен в readNewLines")
-	defer func() {
-		dbMutex.Unlock()
-		log.Println("Мьютекс освобождён в readNewLines")
-	}()
 
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
+	dbMutex.Lock()
 	tx, err := memDB.Begin()
+	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Ошибка начала транзакции: %v", err)
 		return
@@ -355,7 +355,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 	dnsStats := make(map[string]map[string]int)
 
 	for scanner.Scan() {
-		processLogLine(tx, scanner.Text(), dnsStats, cfg)
+		processLogLine(tx, dbMutex, scanner.Text(), dnsStats, cfg)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -364,7 +364,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 		return
 	}
 
-	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
+	if err := upsertDNSRecordsBatch(tx, dbMutex, dnsStats); err != nil {
 		tx.Rollback()
 		return
 	}
@@ -385,7 +385,7 @@ func readNewLines(memDB *sql.DB, file *os.File, offset *int64, cfg *config.Confi
 }
 
 // Запуск задачи мониторинга пользователей и логов
-func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -414,10 +414,10 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config,
 		for {
 			select {
 			case <-ticker.C:
-				if err := db.AddUserToDB(memDB, cfg); err != nil {
+				if err := db.AddUserToDB(memDB, dbMutex, cfg); err != nil {
 					log.Printf("Ошибка добавления пользователей: %v", err)
 				}
-				if err := db.DelUserFromDB(memDB, cfg); err != nil {
+				if err := db.DelUserFromDB(memDB, dbMutex, cfg); err != nil {
 					log.Printf("Ошибка удаления пользователей: %v", err)
 				}
 
@@ -425,10 +425,10 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config,
 				if err != nil {
 					log.Printf("Ошибка получения данных API: %v", err)
 				} else {
-					updateProxyStats(memDB, apiData)
-					updateClientStats(memDB, apiData, cfg)
+					updateProxyStats(memDB, apiData, dbMutex)
+					updateClientStats(memDB, apiData, dbMutex, cfg)
 				}
-				readNewLines(memDB, accessLog, &accessOffset, cfg)
+				readNewLines(memDB, dbMutex, accessLog, &accessOffset, cfg)
 
 			case <-dailyTicker.C:
 				if err := accessLog.Close(); err != nil {
@@ -450,29 +450,29 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, cfg *config.Config,
 	}()
 }
 
-func startAPIServer(ctx context.Context, memDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
+func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	server := &http.Server{
 		Addr:    "127.0.0.1:" + cfg.Port,
 		Handler: nil,
 	}
 
-	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, &dbMutex, cfg.Services, cfg.Features))
+	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, dbMutex, cfg.Services, cfg.Features))
 
-	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, dbMutex))
 	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(cfg))
 	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(cfg))
-	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, cfg))
+	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, dbMutex, cfg))
 
-	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/delete_dns_stats", api.DeleteDNSStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, dbMutex))
+	http.HandleFunc("/api/v1/delete_dns_stats", api.DeleteDNSStatsHandler(memDB, dbMutex))
 
 	http.HandleFunc("/api/v1/reset_traffic", api.ResetTrafficHandler())
-	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, dbMutex))
+	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, dbMutex))
 
-	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, &dbMutex))
-	http.HandleFunc("/api/v1/adjust_date", api.AdjustDateOffsetHandler(memDB, &dbMutex, cfg))
-	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, &dbMutex))
+	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, dbMutex))
+	http.HandleFunc("/api/v1/adjust_date", api.AdjustDateOffsetHandler(memDB, dbMutex, cfg))
+	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, dbMutex))
 
 	go func() {
 		// log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
@@ -501,6 +501,8 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
+	var dbMutex sync.Mutex
+
 	// Инициализация базы данных
 	memDB, err := db.InitDatabase()
 	if err != nil {
@@ -519,10 +521,10 @@ func main() {
 
 	// Start tasks
 	wg.Add(1)
-	go startAPIServer(ctx, memDB, &cfg, &wg)
+	go startAPIServer(ctx, memDB, &dbMutex, &cfg, &wg)
 
-	monitorUsersAndLogs(ctx, memDB, &cfg, &wg)
-	db.MonitorSubscriptionsAndSync(ctx, memDB, &cfg, &wg)
+	monitorUsersAndLogs(ctx, memDB, &dbMutex, &cfg, &wg)
+	db.MonitorSubscriptionsAndSync(ctx, memDB, &dbMutex, &cfg, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &cfg, &wg)
 	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
@@ -552,7 +554,7 @@ func main() {
 	} else {
 		defer fileDB.Close()
 		start := time.Now()
-		if err := db.SyncToFileDB(memDB, fileDB); err != nil {
+		if err := db.SyncToFileDB(memDB, fileDB, &dbMutex); err != nil {
 			log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
 		} else {
 			log.Printf("Database synchronized successfully to %s [%v]", cfg.DatabasePath, time.Since(start))

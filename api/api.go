@@ -1033,7 +1033,7 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 	}
 }
 
-func SetEnabledHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
+func SetEnabledHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			http.Error(w, "Invalid method. Use PATCH", http.StatusMethodNotAllowed)
@@ -1066,7 +1066,7 @@ func SetEnabledHandler(memDB *sql.DB, cfg *config.Config) http.HandlerFunc {
 			}
 		}
 
-		if err := db.ToggleUserEnabled(userIdentifier, enabled, cfg, memDB); err != nil {
+		if err := db.ToggleUserEnabled(userIdentifier, enabled, cfg, memDB, dbMutex); err != nil {
 			log.Printf("Error changing status: %v", err)
 			http.Error(w, "Error updating status", http.StatusInternalServerError)
 			return
@@ -1093,13 +1093,13 @@ func updateSubscriptionDate(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Conf
 		}
 	}
 
-	err = db.AdjustDateOffset(memDB, userIdentifier, subEnd, baseDate)
+	err = db.AdjustDateOffset(memDB, dbMutex, userIdentifier, subEnd, baseDate)
 	if err != nil {
 		return fmt.Errorf("error updating date: %v", err)
 	}
 
 	go func() {
-		db.CheckExpiredSubscriptions(memDB, cfg)
+		db.CheckExpiredSubscriptions(memDB, dbMutex, cfg)
 	}()
 
 	return nil
