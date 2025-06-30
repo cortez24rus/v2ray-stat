@@ -66,7 +66,6 @@ func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 		return fmt.Errorf("ошибка при обработке строк: %v", err)
 	}
 
-	log.Println("logExcessIPs завершён успешно")
 	return nil
 }
 
