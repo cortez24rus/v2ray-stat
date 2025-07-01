@@ -490,14 +490,14 @@ func main() {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
 
-	var dbMutex sync.Mutex
-
 	// Инициализация базы данных
-	memDB, err := db.InitDatabase()
+	var dbMutex sync.Mutex
+	memDB, fileDB, err := db.InitDatabase(&cfg, &dbMutex)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 	defer memDB.Close()
+	defer fileDB.Close()
 
 	// Setup context and signals
 	ctx, cancel := context.WithCancel(context.Background())
@@ -506,14 +506,12 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	var wg sync.WaitGroup
-
 	// Start tasks
+	var wg sync.WaitGroup
 	wg.Add(1)
 	go startAPIServer(ctx, memDB, &dbMutex, &cfg, &wg)
-
 	monitorUsersAndLogs(ctx, memDB, &dbMutex, &cfg, &wg)
-	db.MonitorSubscriptionsAndSync(ctx, memDB, &dbMutex, &cfg, &wg)
+	db.MonitorSubscriptionsAndSync(ctx, memDB, fileDB, &dbMutex, &cfg, &wg)
 	monitor.MonitorExcessIPs(ctx, memDB, &dbMutex, &cfg, &wg)
 	monitor.MonitorBannedLog(ctx, &cfg, &wg)
 
@@ -536,20 +534,7 @@ func main() {
 	log.Println("Received termination signal, saving data")
 	cancel()
 
-	// Synchronize database
-	fileDB, err := db.InitializeFileDB(&cfg)
-	if err != nil {
-		log.Printf("Error initializing file database: %v", err)
-	} else {
-		defer fileDB.Close()
-		start := time.Now()
-		if err := db.SyncToFileDB(memDB, fileDB, &dbMutex); err != nil {
-			log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
-		} else {
-			log.Printf("Database synchronized successfully to %s [%v]", cfg.DatabasePath, time.Since(start))
-		}
-	}
-
+	// Дождаться завершения всех горутин
 	wg.Wait()
 	log.Println("Program completed")
 }

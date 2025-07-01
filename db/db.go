@@ -30,62 +30,6 @@ var (
 	dateOffsetRegex = regexp.MustCompile(`^([+-]?)(\d+)(?::(\d+))?$`)
 )
 
-// BackupDB копирует данные из файловой базы (srcDB) в in-memory базу (memDB) с использованием SQLite Backup API
-func BackupDB(srcDB, memDB *sql.DB, cfg *config.Config) error {
-	start := time.Now()
-
-	// Получаем соединения к исходной и целевой базам
-	srcConn, err := srcDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get connection to source database: %v", err)
-	}
-	defer srcConn.Close()
-
-	memConn, err := memDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get connection to memory database: %v", err)
-	}
-	defer memConn.Close()
-
-	// Выполняем резервное копирование через Raw доступ к драйверу
-	err = srcConn.Raw(func(srcDriverConn interface{}) error {
-		return memConn.Raw(func(memDriverConn interface{}) error {
-			// Приводим соединения к типу *sqlite3.SQLiteConn
-			srcConnSQLite, ok := srcDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("failed to cast source connection to *sqlite3.SQLiteConn")
-			}
-			memConnSQLite, ok := memDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("failed to cast memory connection to *sqlite3.SQLiteConn")
-			}
-
-			// Инициализируем резервное копирование
-			backup, err := memConnSQLite.Backup("main", srcConnSQLite, "main")
-			if err != nil {
-				return fmt.Errorf("failed to initialize backup: %v", err)
-			}
-			defer backup.Finish()
-
-			// Копируем все страницы за один шаг
-			done, err := backup.Step(-1)
-			if err != nil {
-				return fmt.Errorf("failed to perform backup: %v", err)
-			}
-			if !done {
-				return fmt.Errorf("backup did not complete")
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		return fmt.Errorf("error during backup: %v", err)
-	}
-
-	log.Printf("Database backup to memory completed successfully [%v]", time.Since(start))
-	return nil
-}
-
 func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	// Карта для уникальных пользователей по email
 	clientMap := make(map[string]config.XrayClient)
@@ -920,18 +864,83 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 	return false
 }
 
-func InitDB(db *sql.DB) error {
+// SyncDB копирует данные из исходной базы (srcDB) в целевую базу (destDB) с использованием SQLite Backup API
+func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error {
 	start := time.Now()
 
-	_, err := db.Exec(`
-		PRAGMA cache_size = 2000;
-		PRAGMA journal_mode = MEMORY;
-	`)
+	// Получаем соединения к исходной и целевой базам
+	srcConn, err := srcDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("error setting PRAGMA: %v", err)
+		return fmt.Errorf("failed to get connection to source database: %v", err)
+	}
+	defer srcConn.Close()
+
+	destConn, err := destDB.Conn(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get connection to destination database: %v", err)
+	}
+	defer destConn.Close()
+
+	// Выполняем резервное копирование через Raw доступ к драйверу
+	err = srcConn.Raw(func(srcDriverConn interface{}) error {
+		return destConn.Raw(func(destDriverConn interface{}) error {
+			// Приводим соединения к типу *sqlite3.SQLiteConn
+			srcConnSQLite, ok := srcDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("failed to cast source connection to *sqlite3.SQLiteConn")
+			}
+			destConnSQLite, ok := destDriverConn.(*sqlite3.SQLiteConn)
+			if !ok {
+				return fmt.Errorf("failed to cast destination connection to *sqlite3.SQLiteConn")
+			}
+
+			// Инициализируем резервное копирование
+			backup, err := destConnSQLite.Backup("main", srcConnSQLite, "main")
+			if err != nil {
+				return fmt.Errorf("failed to initialize backup: %v", err)
+			}
+			defer backup.Finish()
+
+			// Копируем 500 страниц за один шаг
+			for {
+				dbMutex.Lock()
+				finished, err := backup.Step(500)
+				dbMutex.Unlock()
+				if err != nil {
+					return fmt.Errorf("backup step error: %v", err)
+				}
+				if finished {
+					break
+				}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		log.Printf("Error synchronizing database (%s): %v", direction, err)
+		return fmt.Errorf("error synchronizing database (%s): %v", direction, err)
 	}
 
-	query := `
+	log.Printf("Database synchronized successfully (%s) [%v]", direction, time.Since(start))
+	return nil
+}
+
+// InitDB инициализирует структуру таблиц в базе данных
+func InitDB(db *sql.DB, dbType string) error {
+	start := time.Now()
+
+	var tableCount int
+	err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clients_stats'").Scan(&tableCount)
+	if err != nil {
+		return fmt.Errorf("error checking table existence for %s database: %v", dbType, err)
+	}
+	if tableCount > 0 {
+		return nil // Таблицы уже существуют, инициализация не требуется
+	}
+
+	_, err = db.Exec(`	
+		PRAGMA cache_size = 2000;
+		PRAGMA journal_mode = MEMORY;
 		CREATE TABLE IF NOT EXISTS clients_stats (
 			email TEXT PRIMARY KEY,
 			uuid TEXT,
@@ -960,157 +969,153 @@ func InitDB(db *sql.DB) error {
 			domain TEXT NOT NULL,
 			PRIMARY KEY (email, domain)
 		);
-	`
-
-	_, err = db.Exec(query)
+	`)
 	if err != nil {
 		return fmt.Errorf("error executing SQL query: %v", err)
 	}
 
 	// Создание индексов для таблицы clients_stats
 	indexQueries := []string{
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_email ON clients_stats(email);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_renew ON clients_stats(renew);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_uplink ON clients_stats(sess_uplink);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_downlink ON clients_stats(sess_downlink);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_uplink ON clients_stats(uplink);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip);",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips);",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_email ON clients_stats(email)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_renew ON clients_stats(renew)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_uplink ON clients_stats(sess_uplink)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_downlink ON clients_stats(sess_downlink)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_uplink ON clients_stats(uplink)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips)",
 	}
 
 	for _, indexQuery := range indexQueries {
-		_, err := db.Exec(indexQuery)
-		if err != nil {
+		if _, err := db.Exec(indexQuery); err != nil {
 			return fmt.Errorf("error creating index: %v", err)
 		}
 	}
 
-	log.Printf("Database initialized successfully [%v]", time.Since(start))
+	log.Printf("%s database initialized successfully [%v]", strings.Title(dbType), time.Since(start))
 	return nil
 }
 
-func SyncToFileDB(memDB, fileDB *sql.DB, dbMutex *sync.Mutex) error {
-	log.Println("Начало синхронизации базы данных")
-
-	// Получение соединений
-	memConn, err := memDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("ошибка получения соединения с базой в памяти: %v", err)
-	}
-	defer memConn.Close()
-
-	fileConn, err := fileDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("ошибка получения соединения с файловой базой: %v", err)
-	}
-	defer fileConn.Close()
-
-	// Резервное копирование через SQLite Backup API
-	dbMutex.Lock()
-	err = memConn.Raw(func(memDriverConn any) error {
-		return fileConn.Raw(func(fileDriverConn any) error {
-			// Приводим соединения к типу *sqlite3.SQLiteConn
-			memConnSQLite, ok := memDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("не удалось привести соединение с базой в памяти к *sqlite3.SQLiteConn")
-			}
-			fileConnSQLite, ok := fileDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("не удалось привести соединение с файловой базой к *sqlite3.SQLiteConn")
-			}
-
-			// Инициализируем резервное копирование из memDB в fileDB
-			backup, err := fileConnSQLite.Backup("main", memConnSQLite, "main")
-			if err != nil {
-				return fmt.Errorf("ошибка инициализации резервного копирования: %v", err)
-			}
-			defer backup.Finish()
-
-			// Копируем все страницы за один шаг
-			for {
-				finished, err := backup.Step(500)
-				if err != nil {
-					return fmt.Errorf("backup step error: %v", err)
-				}
-				if finished {
-					break
-				}
-			}
-			return nil
-		})
-	})
-	dbMutex.Unlock()
-
-	if err != nil {
-		log.Printf("Ошибка синхронизации: %v", err)
-		return fmt.Errorf("ошибка синхронизации: %v", err)
-	}
-
-	log.Println("Синхронизация завершена успешно")
-	return nil
-}
-
-// InitDatabase создает in-memory базу данных и инициализирует её структуру.
-func InitDatabase() (memDB *sql.DB, err error) {
-	// Создаём базу данных в оперативной памяти
+// InitDatabase инициализирует in-memory и file базы данных
+func InitDatabase(cfg *config.Config, dbMutex *sync.Mutex) (memDB, fileDB *sql.DB, err error) {
+	// Создаем in-memory базу
 	memDB, err = sql.Open("sqlite3", ":memory:")
 	if err != nil {
-		log.Printf("Ошибка создания in-memory базы данных: %v", err)
-		return nil, fmt.Errorf("failed to create in-memory database: %v", err)
+		log.Printf("Error creating in-memory database: %v", err)
+		return nil, nil, fmt.Errorf("failed to create in-memory database: %v", err)
 	}
 
-	// Инициализируем структуру базы данных
-	if err = InitDB(memDB); err != nil {
-		log.Printf("Ошибка инициализации in-memory базы данных: %v", err)
+	// Инициализируем in-memory базу
+	if err = InitDB(memDB, "in-memory"); err != nil {
+		log.Printf("Error initializing in-memory database: %v", err)
 		memDB.Close()
-		return nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
+		return nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
 	}
 
-	return memDB, nil
-}
-
-func InitializeFileDB(cfg *config.Config) (*sql.DB, error) {
-	fileDB, err := sql.Open("sqlite3", cfg.DatabasePath)
+	// Открываем или создаем файловую базу
+	fileDB, err = sql.Open("sqlite3", cfg.DatabasePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file database: %v", err)
+		log.Printf("Error opening file database: %v", err)
+		memDB.Close()
+		return nil, nil, fmt.Errorf("failed to open file database: %v", err)
 	}
 
-	// Применяем PRAGMA для повышения производительности файловой базы
+	// Оптимизация файловой базы
 	_, err = fileDB.Exec(`
-		PRAGMA journal_mode = WAL;
-		PRAGMA synchronous = NORMAL;
-		PRAGMA temp_store = MEMORY;
-	`)
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+    `)
 	if err != nil {
+		log.Printf("Error setting PRAGMA on file database: %v", err)
+		memDB.Close()
 		fileDB.Close()
-		return nil, fmt.Errorf("error setting PRAGMA on fileDB: %v", err)
+		return nil, nil, fmt.Errorf("error setting PRAGMA on file database: %v", err)
 	}
 
-	// Инициализируем структуру таблиц в файловой базе данных
-	if err = InitDB(fileDB); err != nil {
+	// Проверяем существование файла базы данных
+	fileExists := true
+	if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
+		fileExists = false
+		log.Printf("File database %s does not exist, will create new file database", cfg.DatabasePath)
+	} else if err != nil {
+		log.Printf("Error checking file database %s: %v", cfg.DatabasePath, err)
+		memDB.Close()
 		fileDB.Close()
-		return nil, fmt.Errorf("error initializing file database: %v", err)
+		return nil, nil, fmt.Errorf("error checking file database: %v", err)
 	}
 
-	return fileDB, nil
+	if fileExists {
+		// Проверяем целостность базы
+		_, err = fileDB.Exec("SELECT count(*) FROM clients_stats")
+		if err != nil {
+			fileDB.Close()
+			// Удаляем поврежденный файл
+			if err := os.Remove(cfg.DatabasePath); err != nil {
+				log.Printf("Error removing corrupted database file: %v", err)
+				memDB.Close()
+				return nil, nil, fmt.Errorf("error removing corrupted database file: %v", err)
+			}
+			// Создаем новую файловую базу
+			fileDB, err = sql.Open("sqlite3", cfg.DatabasePath)
+			if err != nil {
+				log.Printf("Error creating new file database: %v", err)
+				memDB.Close()
+				return nil, nil, fmt.Errorf("failed to create new file database: %v", err)
+			}
+			// Повторно применяем оптимизации
+			_, err = fileDB.Exec(`
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = NORMAL;
+                PRAGMA temp_store = MEMORY;
+            `)
+			if err != nil {
+				log.Printf("Error setting PRAGMA on new file database: %v", err)
+				memDB.Close()
+				fileDB.Close()
+				return nil, nil, fmt.Errorf("error setting PRAGMA on new file database: %v", err)
+			}
+			// Инициализируем новую файловую базу
+			if err = InitDB(fileDB, "file"); err != nil {
+				log.Printf("Error initializing new file database: %v", err)
+				memDB.Close()
+				fileDB.Close()
+				return nil, nil, fmt.Errorf("failed to initialize new file database: %v", err)
+			}
+		} else {
+			// База цела, инициализируем и синхронизируем данные из файла в память
+			if err = InitDB(fileDB, "file"); err != nil {
+				log.Printf("Error initializing file database: %v", err)
+				memDB.Close()
+				fileDB.Close()
+				return nil, nil, fmt.Errorf("failed to initialize file database: %v", err)
+			}
+			// Синхронизируем данные из файла в память
+			if err = SyncDB(fileDB, memDB, dbMutex, "file to memory"); err != nil {
+				log.Printf("Error synchronizing database (file to memory): %v", err)
+			}
+		}
+	} else {
+		// Файла нет, инициализируем новую файловую базу
+		if err = InitDB(fileDB, "file"); err != nil {
+			log.Printf("Error initializing new file database: %v", err)
+			memDB.Close()
+			fileDB.Close()
+			return nil, nil, fmt.Errorf("failed to initialize new file database: %v", err)
+		}
+	}
+
+	return memDB, fileDB, nil
 }
 
 // Запуск задачи синхронизации базы и проверки подписок
-func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
+func MonitorSubscriptionsAndSync(ctx context.Context, memDB, fileDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		// Инициализация файловой базы данных
-		fileDB, err := InitializeFileDB(cfg)
-		if err != nil {
-			log.Fatalf("InitializeFileDB error: %v", err)
-		}
-		defer fileDB.Close()
 
 		ticker := time.NewTicker(10 * time.Minute)
 		defer ticker.Stop()
@@ -1123,13 +1128,13 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB *sql.DB, dbMutex *sy
 				}
 				CheckExpiredSubscriptions(memDB, dbMutex, cfg)
 
-				start := time.Now()
-				if err := SyncToFileDB(memDB, fileDB, dbMutex); err != nil {
-					log.Printf("Error synchronizing database: %v [%v]", err, time.Since(start))
-				} else {
-					log.Printf("Database synchronized successfully [%v]", time.Since(start))
+				if err := SyncDB(memDB, fileDB, dbMutex, "memory to file"); err != nil {
+					log.Printf("Error synchronizing database: %v", err)
 				}
 			case <-ctx.Done():
+				if err := SyncDB(memDB, fileDB, dbMutex, "memory to file"); err != nil {
+					log.Printf("Error synchronizing database: %v", err)
+				}
 				return
 			}
 		}
