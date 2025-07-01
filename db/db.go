@@ -1113,7 +1113,7 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB, fileDB *sql.DB, dbM
 	go func() {
 		defer wg.Done()
 
-		ticker := time.NewTicker(10 * time.Minute)
+		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
 
 		for {
