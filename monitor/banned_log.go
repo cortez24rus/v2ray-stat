@@ -54,8 +54,8 @@ func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) 
 				" Time:   *%s*", email, ip, timestamp)
 		}
 
-		if cfg.TelegramBotToken != "" && cfg.TelegramChatId != "" {
-			if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err != nil {
+		if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
+			if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err != nil {
 				log.Printf("Error sending ban notification: %v", err)
 			}
 		}

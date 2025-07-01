@@ -22,14 +22,10 @@ curl -X GET http://127.0.0.1:9952/api/v1/users
     - `extended`: Полный набор данных.
       - Для `traffic_stats`: `Source`, `Sess Up`, `Sess Down`, `Upload`, `Download`.
       - Для `clients_stats`: `Email`, `Status`, `Enabled`, `Sub end`, `Renew`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Lim`, `Ips`.
+  - sort_by (необязательный) — поле для сортировки (email, rate, enabled, sub_end, renew, sess_uplink, sess_downlink, uplink, downlink, lim_ip), по умолчанию email.
+  - sort_order (необязательный) — порядок сортировки: ASC или DESC, по умолчанию ASC.
 ```bash
-curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=minimal
-```
-```bash
-curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=standard
-```
-```bash
-curl -X GET http://127.0.0.1:9952/api/v1/stats?mode=extended
+curl -X GET "http://127.0.0.1:9952/api/v1/stats?mode=extended&sort_by=email&sort_order=DESC"
 ```
 
 ### Статистика DNS

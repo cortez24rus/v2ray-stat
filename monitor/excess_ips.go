@@ -75,9 +75,9 @@ func MonitorExcessIPs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, c
 	go func() {
 		defer wg.Done()
 
-		logFile, err := os.OpenFile(cfg.XipLogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		logFile, err := os.OpenFile(cfg.V2LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("Ошибка открытия файла логов %s: %v", cfg.XipLogFile, err)
+			log.Printf("Ошибка открытия файла логов %s: %v", cfg.V2LogFile, err)
 			return
 		}
 		defer logFile.Close()

@@ -241,12 +241,10 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 	return nil
 }
 
-func UpdateIPInDB(tx *sql.Tx, dbMutex *sync.Mutex, email string, ipList []string) error {
+func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
 	ipStr := strings.Join(ipList, ",")
 	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
-	dbMutex.Lock()
 	_, err := tx.Exec(query, ipStr, email)
-	dbMutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("error updating data: %v", err)
 	}
@@ -383,7 +381,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 			}
 
 			if subEnd.Before(start) {
-				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatId != ""
+				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatID != ""
 
 				notifiedMutex.Lock()
 				if canSendNotifications && !notifiedUsers[s.Email] {
@@ -391,7 +389,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 					message := fmt.Sprintf("❌ Subscription expired\n\n"+
 						"Client:   *%s*\n"+
 						"Expiration date:   *%s*", s.Email, formattedDate)
-					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
+					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
 						notifiedUsers[s.Email] = true
 					}
 				}
@@ -407,12 +405,14 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 					log.Printf("Auto-renewed subscription for user %s for %d days", s.Email, s.Renew)
 
 					if canSendNotifications {
+						notifiedMutex.Lock()
 						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
 							"Client:   *%s*\n"+
 							"Renewed for:   *%d days*", s.Email, s.Renew)
-						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatId, message); err == nil {
+						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
 							renewNotifiedUsers[s.Email] = true
 						}
+						notifiedMutex.Unlock()
 					}
 
 					notifiedMutex.Lock()
@@ -868,6 +868,9 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error {
 	start := time.Now()
 
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	// Получаем соединения к исходной и целевой базам
 	srcConn, err := srcDB.Conn(context.Background())
 	if err != nil {
@@ -881,8 +884,6 @@ func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error 
 	}
 	defer destConn.Close()
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
 	// Выполняем резервное копирование через Raw доступ к драйверу
 	err = srcConn.Raw(func(srcDriverConn interface{}) error {
 		return destConn.Raw(func(destDriverConn interface{}) error {
@@ -904,11 +905,15 @@ func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error 
 			defer backup.Finish()
 
 			// Копируем 500 страниц за один шаг
-			_, err = backup.Step(-1)
-			if err != nil {
-				return fmt.Errorf("backup step error: %v", err)
+			for {
+				finished, err := backup.Step(500)
+				if err != nil {
+					return fmt.Errorf("backup step error: %v", err)
+				}
+				if finished {
+					break
+				}
 			}
-
 			return nil
 		})
 	})

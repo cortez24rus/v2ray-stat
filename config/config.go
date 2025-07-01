@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,16 +14,17 @@ import (
 // Config holds the configuration settings for the application.
 type Config struct {
 	CoreType              string
+	Port                  string
 	CoreDir               string
 	CoreConfig            string
-	AccessLogPath         string
 	DatabasePath          string
-	XipLogFile            string
+	V2LogFile             string
 	BannedLogFile         string
+	AccessLogPath         string
+	AccessLogRegex        string
 	IpTtl                 time.Duration
-	Port                  string
 	TelegramBotToken      string
-	TelegramChatId        string
+	TelegramChatID        string
 	Services              []string
 	MemoryAverageInterval int
 	DiskThreshold         int
@@ -34,16 +36,17 @@ type Config struct {
 // defaultConfig provides default configuration values.
 var defaultConfig = Config{
 	CoreType:              "xray",
+	Port:                  "9952",
 	CoreDir:               "/usr/local/etc/xray/",
 	CoreConfig:            "/usr/local/etc/xray/config.json",
-	AccessLogPath:         "/usr/local/etc/xray/access.log",
 	DatabasePath:          "/usr/local/v2ray-stat/data.db",
-	XipLogFile:            "/var/log/v2ray-stat.log",
+	V2LogFile:             "/var/log/v2ray-stat.log",
 	BannedLogFile:         "/var/log/v2ray-stat-banned.log",
-	Port:                  "9952",
+	AccessLogPath:         "/usr/local/etc/xray/access.log",
+	AccessLogRegex:        `from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`,
 	IpTtl:                 66 * time.Second,
 	TelegramBotToken:      "",
-	TelegramChatId:        "",
+	TelegramChatID:        "",
 	Services:              []string{"xray", "fail2ban-server"},
 	MemoryAverageInterval: 120,
 	DiskThreshold:         0,
@@ -87,84 +90,104 @@ func LoadConfig(configFile string) (Config, error) {
 		return cfg, fmt.Errorf("error reading configuration file: %v", err)
 	}
 
-	if val, ok := configMap["CORE_TYPE"]; ok {
-		if val == "xray" || val == "singbox" {
-			cfg.CoreType = val
-		}
-	}
-	if val, ok := configMap["CORE_DIR"]; ok && val != "" {
-		cfg.CoreDir = val
-	}
-	if val, ok := configMap["CORE_CONFIG"]; ok && val != "" {
-		cfg.CoreConfig = val
-	}
-	if val, ok := configMap["ACCESS_LOG_PATH"]; ok && val != "" {
-		cfg.AccessLogPath = val
-	}
-	if val, ok := configMap["DATABASE_PATH"]; ok && val != "" {
-		cfg.DatabasePath = val
-	}
-	if val, ok := configMap["XIP_LOG_FILE"]; ok && val != "" {
-		cfg.XipLogFile = val
-	}
-	if val, ok := configMap["BANNED_LOG_FILE"]; ok && val != "" {
-		cfg.BannedLogFile = val
-	}
-	if val, ok := configMap["PORT"]; ok && val != "" {
-		portNum, err := strconv.Atoi(val)
-		if err != nil || portNum < 1 || portNum > 65535 {
-			return cfg, fmt.Errorf("invalid port: %s", val)
-		}
-		cfg.Port = val
-	}
-	if val, ok := configMap["TELEGRAM_BOT_TOKEN"]; ok && val != "" {
-		cfg.TelegramBotToken = val
-	}
-	if val, ok := configMap["TELEGRAM_CHAT_ID"]; ok && val != "" {
-		cfg.TelegramChatId = val
-	}
-	if val, ok := configMap["SERVICES"]; ok && val != "" {
-		cfg.Services = strings.Split(val, ",")
-		for i, svc := range cfg.Services {
-			cfg.Services[i] = strings.TrimSpace(svc)
-		}
-	}
-	if val, ok := configMap["MEMORY_AVERAGE_INTERVAL"]; ok {
-		interval, _ := strconv.Atoi(val)
-		if interval < 10 {
-			log.Printf("Invalid MEMORY_AVERAGE_INTERVAL value, using default: %d", cfg.MemoryAverageInterval)
-		} else {
-			cfg.MemoryAverageInterval = interval
-		}
-	}
-	if val, ok := configMap["MEMORY_THRESHOLD"]; ok {
-		mthreshold, _ := strconv.Atoi(val)
-		if mthreshold < 0 || mthreshold > 100 {
-			log.Printf("Invalid MEMORY_THRESHOLD value '%s', using default %d%%", val, cfg.MemoryThreshold)
-		} else {
-			cfg.MemoryThreshold = mthreshold
-		}
-	}
-	if val, ok := configMap["DISK_THRESHOLD"]; ok {
-		dthreshold, _ := strconv.Atoi(val)
-		if dthreshold < 0 || dthreshold > 100 {
-			log.Printf("Invalid DISK_THRESHOLD value '%s', using default %d%%", val, cfg.DiskThreshold)
-		} else {
-			cfg.DiskThreshold = dthreshold
-		}
-	}
-	if val, ok := configMap["FEATURES"]; ok && val != "" {
-		features := strings.Split(val, ",")
-		for _, feature := range features {
-			cfg.Features[strings.TrimSpace(feature)] = true
-		}
-	}
-	if val, ok := configMap["MONITOR_TICKER_INTERVAL"]; ok && val != "" {
-		interval, err := strconv.Atoi(val)
-		if err != nil || interval < 1 {
-			log.Printf("Invalid MONITOR_TICKER_INTERVAL value '%s', using default %d seconds", val, cfg.MonitorTickerInterval)
-		} else {
-			cfg.MonitorTickerInterval = interval
+	for key, value := range configMap {
+		switch key {
+		case "CORE_TYPE":
+			if value == "xray" || value == "singbox" {
+				cfg.CoreType = value
+			}
+		case "CORE_DIR":
+			if value != "" {
+				cfg.CoreDir = value
+			}
+		case "CORE_CONFIG":
+			if value != "" {
+				cfg.CoreConfig = value
+			}
+		case "DATABASE_PATH":
+			if value != "" {
+				cfg.DatabasePath = value
+			}
+		case "V2_LOG_FILE":
+			if value != "" {
+				cfg.V2LogFile = value
+			}
+		case "BANNED_LOG_FILE":
+			if value != "" {
+				cfg.BannedLogFile = value
+			}
+		case "ACCESS_LOG_PATH":
+			if value != "" {
+				cfg.AccessLogPath = value
+			}
+		case "ACCESS_LOG_REGEX":
+			if value != "" {
+				if _, err := regexp.Compile(value); err != nil {
+					log.Printf("Invalid ACCESS_LOG_REGEX from config file: %v, using default", err)
+				} else {
+					cfg.AccessLogRegex = value
+				}
+			}
+		case "PORT":
+			if value != "" {
+				portNum, err := strconv.Atoi(value)
+				if err != nil || portNum < 1 || portNum > 65535 {
+					return cfg, fmt.Errorf("invalid port: %s", value)
+				}
+				cfg.Port = value
+			}
+		case "TELEGRAM_BOT_TOKEN":
+			if value != "" {
+				cfg.TelegramBotToken = value
+			}
+		case "TELEGRAM_CHAT_ID":
+			if value != "" {
+				cfg.TelegramChatID = value
+			}
+		case "SERVICES":
+			if value != "" {
+				cfg.Services = strings.Split(value, ",")
+				for i, svc := range cfg.Services {
+					cfg.Services[i] = strings.TrimSpace(svc)
+				}
+			}
+		case "MEMORY_AVERAGE_INTERVAL":
+			interval, err := strconv.Atoi(value)
+			if err != nil || interval < 10 {
+				log.Printf("Invalid MEMORY_AVERAGE_INTERVAL value, using default: %d", cfg.MemoryAverageInterval)
+			} else {
+				cfg.MemoryAverageInterval = interval
+			}
+		case "MEMORY_THRESHOLD":
+			mthreshold, err := strconv.Atoi(value)
+			if err != nil || mthreshold < 0 || mthreshold > 100 {
+				log.Printf("Invalid MEMORY_THRESHOLD value '%s', using default %d%%", value, cfg.MemoryThreshold)
+			} else {
+				cfg.MemoryThreshold = mthreshold
+			}
+		case "DISK_THRESHOLD":
+			dthreshold, err := strconv.Atoi(value)
+			if err != nil || dthreshold < 0 || dthreshold > 100 {
+				log.Printf("Invalid DISK_THRESHOLD value '%s', using default %d%%", value, cfg.DiskThreshold)
+			} else {
+				cfg.DiskThreshold = dthreshold
+			}
+		case "FEATURES":
+			if value != "" {
+				features := strings.Split(value, ",")
+				for _, feature := range features {
+					cfg.Features[strings.TrimSpace(feature)] = true
+				}
+			}
+		case "MONITOR_TICKER_INTERVAL":
+			interval, err := strconv.Atoi(value)
+			if err != nil || interval < 1 {
+				log.Printf("Invalid MONITOR_TICKER_INTERVAL value '%s', using default %d seconds", value, cfg.MonitorTickerInterval)
+			} else {
+				cfg.MonitorTickerInterval = interval
+			}
+		default:
+			log.Printf("Warning: unknown configuration key: %s", key)
 		}
 	}
 

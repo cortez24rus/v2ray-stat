@@ -448,9 +448,9 @@ func MonitorStats(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 		for {
 			select {
 			case <-ticker.C:
-				CheckServiceStatus(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.Services)
-				CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.DiskThreshold, cfg.MemoryAverageInterval)
-				CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatId, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
+				CheckServiceStatus(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.Services)
+				CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.DiskThreshold, cfg.MemoryAverageInterval)
+				CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
 			case <-ctx.Done():
 				return
 			}

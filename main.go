@@ -29,13 +29,8 @@ import (
 var (
 	uniqueEntries       = make(map[string]map[string]time.Time)
 	uniqueEntriesMutex  sync.Mutex
-	fileMutex           sync.Mutex
 	previousStats       string
 	clientPreviousStats string
-)
-
-var (
-	accessLogRegex = regexp.MustCompile(`from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`)
 )
 
 func extractProxyTraffic(apiData *api.ApiResponse) []string {
@@ -75,9 +70,6 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -142,6 +134,8 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 	}
 
 	if queries != "" {
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		_, err := memDB.Exec(queries)
 		if err != nil {
 			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
@@ -152,9 +146,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
@@ -256,6 +247,8 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	}
 
 	if queries != "" {
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
 		_, err := memDB.Exec(queries)
 		if err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
@@ -275,16 +268,14 @@ func stringToInt(s string) int {
 	return result
 }
 
-func upsertDNSRecordsBatch(tx *sql.Tx, dbMutex *sync.Mutex, dnsStats map[string]map[string]int) error {
+func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error {
 	for email, domains := range dnsStats {
 		for domain, count := range domains {
-			dbMutex.Lock()
 			_, err := tx.Exec(`
                 INSERT INTO dns_stats (email, domain, count) 
                 VALUES (?, ?, ?)
                 ON CONFLICT(email, domain) 
                 DO UPDATE SET count = count + ?`, email, domain, count, count)
-			dbMutex.Unlock()
 			if err != nil {
 				log.Printf("Ошибка при пакетном обновлении dns_stats: %v", err)
 				return fmt.Errorf("error during batch update of dns_stats: %v", err)
@@ -294,40 +285,45 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dbMutex *sync.Mutex, dnsStats map[string]
 	return nil
 }
 
-func processLogLine(tx *sql.Tx, dbMutex *sync.Mutex, line string, dnsStats map[string]map[string]int, cfg *config.Config) {
-	matches := accessLogRegex.FindStringSubmatch(line)
-	if len(matches) != 4 {
-		return
+func processLogLine(line string, dnsStats map[string]map[string]int, cfg *config.Config) (string, []string, bool) {
+	matches := regexp.MustCompile(cfg.AccessLogRegex).FindStringSubmatch(line)
+	if len(matches) != 3 && len(matches) != 4 {
+		return "", nil, false
 	}
 
-	email := strings.TrimSpace(matches[3])
-	domain := strings.TrimSpace(matches[2])
-	ip := matches[1]
+	var email, domain, ip string
+	if len(matches) == 4 {
+		ip = matches[1]
+		domain = strings.TrimSpace(matches[2])
+		email = strings.TrimSpace(matches[3])
+	} else {
+		email = strings.TrimSpace(matches[1])
+		ip = strings.TrimSpace(matches[2])
+		domain = ""
+	}
 
 	uniqueEntriesMutex.Lock()
 	if uniqueEntries[email] == nil {
 		uniqueEntries[email] = make(map[string]time.Time)
 	}
 	uniqueEntries[email][ip] = time.Now()
-	uniqueEntriesMutex.Unlock()
 
 	validIPs := []string{}
 	for ip, timestamp := range uniqueEntries[email] {
-		if time.Since(timestamp) <= cfg.IpTtl {
+		if time.Since(timestamp) <= 66*time.Second {
 			validIPs = append(validIPs, ip)
-		} else {
-			delete(uniqueEntries[email], ip)
 		}
 	}
-
-	if err := db.UpdateIPInDB(tx, dbMutex, email, validIPs); err != nil {
-		log.Printf("Error updating IP in database: %v", err)
-	}
+	uniqueEntriesMutex.Unlock()
 
 	if dnsStats[email] == nil {
 		dnsStats[email] = make(map[string]int)
 	}
-	dnsStats[email][domain]++
+	if domain != "" {
+		dnsStats[email][domain]++
+	}
+
+	return email, validIPs, true
 }
 
 func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int64, cfg *config.Config) {
@@ -336,34 +332,55 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 
 	dbMutex.Lock()
 	tx, err := memDB.Begin()
-	dbMutex.Unlock()
 	if err != nil {
+		dbMutex.Unlock()
 		log.Printf("Ошибка начала транзакции: %v", err)
 		return
 	}
 
 	dnsStats := make(map[string]map[string]int)
+	ipUpdates := make(map[string][]string)
 
 	for scanner.Scan() {
-		processLogLine(tx, dbMutex, scanner.Text(), dnsStats, cfg)
+		email, validIPs, ok := processLogLine(scanner.Text(), dnsStats, cfg)
+		if ok {
+			ipUpdates[email] = validIPs
+			// log.Printf("DEBUG: Добавлено в ipUpdates: email=%s, validIPs=%v", email, validIPs)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		log.Printf("Ошибка чтения файла: %v", err)
 		tx.Rollback()
+		dbMutex.Unlock()
 		return
 	}
 
-	if err := upsertDNSRecordsBatch(tx, dbMutex, dnsStats); err != nil {
+	// Обновление IP-адресов в базе
+	for email, validIPs := range ipUpdates {
+		// log.Printf("DEBUG: Вызов UpdateIPInDB для email=%s с validIPs=%v", email, validIPs)
+		if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
+			log.Printf("Error updating IP in database: %v", err)
+			tx.Rollback()
+			dbMutex.Unlock()
+			return
+		}
+	}
+
+	// Обновление DNS-записей
+	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
 		tx.Rollback()
+		dbMutex.Unlock()
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
 		log.Printf("Ошибка фиксации транзакции: %v", err)
 		tx.Rollback()
+		dbMutex.Unlock()
 		return
 	}
+	dbMutex.Unlock()
 
 	pos, err := file.Seek(0, 1)
 	if err != nil {
