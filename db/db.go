@@ -881,6 +881,8 @@ func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error 
 	}
 	defer destConn.Close()
 
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 	// Выполняем резервное копирование через Raw доступ к драйверу
 	err = srcConn.Raw(func(srcDriverConn interface{}) error {
 		return destConn.Raw(func(destDriverConn interface{}) error {
@@ -902,17 +904,11 @@ func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error 
 			defer backup.Finish()
 
 			// Копируем 500 страниц за один шаг
-			for {
-				dbMutex.Lock()
-				finished, err := backup.Step(500)
-				dbMutex.Unlock()
-				if err != nil {
-					return fmt.Errorf("backup step error: %v", err)
-				}
-				if finished {
-					break
-				}
+			_, err = backup.Step(-1)
+			if err != nil {
+				return fmt.Errorf("backup step error: %v", err)
 			}
+
 			return nil
 		})
 	})
