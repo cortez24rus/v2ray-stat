@@ -70,6 +70,9 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -134,8 +137,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 	}
 
 	if queries != "" {
-		dbMutex.Lock()
-		defer dbMutex.Unlock()
 		_, err := memDB.Exec(queries)
 		if err != nil {
 			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
@@ -146,6 +147,9 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
@@ -247,8 +251,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	}
 
 	if queries != "" {
-		dbMutex.Lock()
-		defer dbMutex.Unlock()
 		_, err := memDB.Exec(queries)
 		if err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
@@ -327,13 +329,14 @@ func processLogLine(line string, dnsStats map[string]map[string]int, cfg *config
 }
 
 func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int64, cfg *config.Config) {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	file.Seek(*offset, 0)
 	scanner := bufio.NewScanner(file)
 
-	dbMutex.Lock()
 	tx, err := memDB.Begin()
 	if err != nil {
-		dbMutex.Unlock()
 		log.Printf("Ошибка начала транзакции: %v", err)
 		return
 	}
@@ -352,7 +355,6 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 	if err := scanner.Err(); err != nil {
 		log.Printf("Ошибка чтения файла: %v", err)
 		tx.Rollback()
-		dbMutex.Unlock()
 		return
 	}
 
@@ -362,7 +364,6 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 		if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
 			log.Printf("Error updating IP in database: %v", err)
 			tx.Rollback()
-			dbMutex.Unlock()
 			return
 		}
 	}
@@ -370,17 +371,14 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 	// Обновление DNS-записей
 	if err := upsertDNSRecordsBatch(tx, dnsStats); err != nil {
 		tx.Rollback()
-		dbMutex.Unlock()
 		return
 	}
 
 	if err := tx.Commit(); err != nil {
 		log.Printf("Ошибка фиксации транзакции: %v", err)
 		tx.Rollback()
-		dbMutex.Unlock()
 		return
 	}
-	dbMutex.Unlock()
 
 	pos, err := file.Seek(0, 1)
 	if err != nil {

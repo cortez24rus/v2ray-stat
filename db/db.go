@@ -132,21 +132,21 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 		return nil
 	}
 
-	start := time.Now() // Замер времени начала выполнения
+	start := time.Now()
 	var addedEmails []string
 	currentTime := time.Now().Format("2006-01-02-15")
 
 	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	tx, err := memDB.Begin()
 	if err != nil {
-		dbMutex.Unlock()
 		return fmt.Errorf("error starting transaction: %v", err)
 	}
 
 	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		tx.Rollback()
-		dbMutex.Unlock()
 		return fmt.Errorf("error preparing statement: %v", err)
 	}
 	defer stmt.Close()
@@ -155,14 +155,12 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 		result, err := stmt.Exec(client.Email, client.ID, "0", "true", currentTime)
 		if err != nil {
 			tx.Rollback()
-			dbMutex.Unlock()
 			return fmt.Errorf("error inserting client %s: %v", client.Email, err)
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
 			tx.Rollback()
-			dbMutex.Unlock()
 			return fmt.Errorf("error getting RowsAffected for client %s: %v", client.Email, err)
 		}
 		if rowsAffected > 0 {
@@ -173,7 +171,6 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("error committing transaction: %v", err)
 	}
-	dbMutex.Unlock()
 
 	if len(addedEmails) > 0 {
 		log.Printf("Users successfully added to database: %s [%v]", strings.Join(addedEmails, ", "), time.Since(start))
@@ -194,9 +191,10 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 	start := time.Now()
 
 	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	rows, err := memDB.Query("SELECT email FROM clients_stats")
 	if err != nil {
-		dbMutex.Unlock()
 		return fmt.Errorf("error executing query: %v", err)
 	}
 	defer rows.Close()
@@ -205,12 +203,10 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 	for rows.Next() {
 		var email string
 		if err := rows.Scan(&email); err != nil {
-			dbMutex.Unlock()
 			return fmt.Errorf("error scanning row: %v", err)
 		}
 		usersDB = append(usersDB, email)
 	}
-	dbMutex.Unlock()
 
 	var Queries string
 	var deletedEmails []string
@@ -229,9 +225,7 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 	}
 
 	if Queries != "" {
-		dbMutex.Lock()
 		_, err := memDB.Exec(Queries)
-		dbMutex.Unlock()
 		if err != nil {
 			return fmt.Errorf("error executing transaction: %v", err)
 		}
@@ -258,8 +252,9 @@ func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, email string, enabled
 	}
 
 	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE email = ?", enabledStr, email)
-	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error updating database for email %s: %v", email, err)
 	} else {
@@ -309,10 +304,11 @@ func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, 
 	start := time.Now()
 	offset = strings.TrimSpace(offset)
 
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	if offset == "0" {
-		dbMutex.Lock()
 		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE email = ?", email)
-		dbMutex.Unlock()
 		if err != nil {
 			return fmt.Errorf("error updating database: %v", err)
 		}
@@ -325,9 +321,7 @@ func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, 
 		return fmt.Errorf("invalid offset format: %v", err)
 	}
 
-	dbMutex.Lock()
 	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE email = ?", newDate.Format("2006-01-02-15"), email)
-	dbMutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("error updating database: %v", err)
 	}
@@ -340,8 +334,9 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 	start := time.Now()
 
 	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
-	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error querying database: %v", err)
 		return
@@ -454,6 +449,9 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 }
 
 func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	// Получаем все теги из traffic_stats
 	rows, err := memDB.Query("SELECT source FROM traffic_stats")
 	if err != nil {
@@ -521,7 +519,6 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 
 	// Выполняем удаление
 	if len(queries) > 0 {
-		dbMutex.Lock()
 		tx, err := memDB.Begin()
 		if err != nil {
 			return fmt.Errorf("error starting transaction: %v", err)
@@ -537,7 +534,6 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("error committing transaction: %v", err)
 		}
-		defer dbMutex.Unlock()
 
 		log.Printf("Deleted non-existent tags from traffic_stats: %s", strings.Join(invalidTags, ", "))
 	}

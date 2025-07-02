@@ -50,8 +50,9 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		}
 
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		rows, err := memDB.Query("SELECT email, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -162,6 +163,9 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		return
 	}
 
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	formatTable := func(rows *sql.Rows, trafficColumns []string) (string, error) {
 		columns, err := rows.Columns()
 		if err != nil {
@@ -255,9 +259,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		trafficColsServer = []string{"Sess Up", "Sess Down", "Upload", "Download"}
 	}
 
-	dbMutex.Lock()
 	rows, err := memDB.Query(serverQuery)
-	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error executing server stats query: %v", err)
 		return
@@ -306,9 +308,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
-	dbMutex.Lock()
 	rows, err = memDB.Query(clientQuery)
-	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error executing client stats query: %v", err)
 		return
@@ -430,17 +430,18 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			return
 		}
 
+		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		stats := " 📊 DNS Query Statistics:\n"
 		stats += fmt.Sprintf("%-12s %-6s %-s\n", "Email", "Count", "Domain")
 		stats += "-------------------------------------------------------------\n"
-		dbMutex.Lock()
 		rows, err := memDB.Query(`
 			SELECT email AS "Email", count AS "Count", domain AS "Domain"
 			FROM dns_stats
 			WHERE email = ?
 			ORDER BY count DESC
 			LIMIT ?`, email, count)
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -509,10 +510,11 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			}
 		}
 
-		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
+		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
 		result, err := memDB.Exec(query, ipLimitInt, userIdentifier)
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error updating lim_ip for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating lim_ip", http.StatusInternalServerError)
@@ -549,8 +551,9 @@ func DeleteDNSStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc 
 		}
 
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		result, err := memDB.Exec("DELETE FROM dns_stats")
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error deleting records from dns_stats: %v", err)
 			http.Error(w, "Failed to delete records from dns_stats", http.StatusInternalServerError)
@@ -582,8 +585,9 @@ func ResetTrafficStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFu
 		}
 
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		result, err := memDB.Exec("UPDATE traffic_stats SET uplink = 0, downlink = 0")
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error resetting traffic statistics: %v", err)
 			http.Error(w, "Failed to reset traffic statistics", http.StatusInternalServerError)
@@ -615,8 +619,9 @@ func ResetClientsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFu
 		}
 
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		result, err := memDB.Exec("UPDATE clients_stats SET uplink = 0, downlink = 0")
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error resetting traffic statistics: %v", err)
 			http.Error(w, "Failed to reset traffic statistics", http.StatusInternalServerError)
@@ -677,8 +682,9 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		}
 
 		dbMutex.Lock()
+		defer dbMutex.Unlock()
+
 		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE email = ?", renew, userIdentifier)
-		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error updating renew for %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating database", http.StatusInternalServerError)
@@ -1080,9 +1086,7 @@ func updateSubscriptionDate(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Conf
 	baseDate := time.Now().UTC()
 	var subEndStr string
 
-	dbMutex.Lock()
 	err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", userIdentifier).Scan(&subEndStr)
-	dbMutex.Unlock()
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("error querying database: %v", err)
 	}
