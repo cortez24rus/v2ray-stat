@@ -48,11 +48,10 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			http.Error(w, "Database not initialized", http.StatusInternalServerError)
 			return
 		}
-	
-		dbMutex.Lock()
-		defer dbMutex.Unlock()
 
+		dbMutex.Lock()
 		rows, err := memDB.Query("SELECT email, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -256,7 +255,9 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		trafficColsServer = []string{"Sess Up", "Sess Down", "Upload", "Download"}
 	}
 
+	dbMutex.Lock()
 	rows, err := memDB.Query(serverQuery)
+	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error executing server stats query: %v", err)
 		return
@@ -306,9 +307,8 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	}
 
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	rows, err = memDB.Query(clientQuery)
+	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Error executing client stats query: %v", err)
 		return
@@ -433,16 +433,14 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		stats := " 📊 DNS Query Statistics:\n"
 		stats += fmt.Sprintf("%-12s %-6s %-s\n", "Email", "Count", "Domain")
 		stats += "-------------------------------------------------------------\n"
-
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		rows, err := memDB.Query(`
 			SELECT email AS "Email", count AS "Count", domain AS "Domain"
 			FROM dns_stats
 			WHERE email = ?
 			ORDER BY count DESC
 			LIMIT ?`, email, count)
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -512,11 +510,9 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		}
 
 		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
-		
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		result, err := memDB.Exec(query, ipLimitInt, userIdentifier)
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error updating lim_ip for user %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating lim_ip", http.StatusInternalServerError)
@@ -553,9 +549,8 @@ func DeleteDNSStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc 
 		}
 
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		result, err := memDB.Exec("DELETE FROM dns_stats")
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error deleting records from dns_stats: %v", err)
 			http.Error(w, "Failed to delete records from dns_stats", http.StatusInternalServerError)
@@ -587,9 +582,8 @@ func ResetTrafficStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFu
 		}
 
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		result, err := memDB.Exec("UPDATE traffic_stats SET uplink = 0, downlink = 0")
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error resetting traffic statistics: %v", err)
 			http.Error(w, "Failed to reset traffic statistics", http.StatusInternalServerError)
@@ -621,9 +615,8 @@ func ResetClientsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFu
 		}
 
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		result, err := memDB.Exec("UPDATE clients_stats SET uplink = 0, downlink = 0")
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error resetting traffic statistics: %v", err)
 			http.Error(w, "Failed to reset traffic statistics", http.StatusInternalServerError)
@@ -684,9 +677,8 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		}
 
 		dbMutex.Lock()
-		defer dbMutex.Unlock()
-
 		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE email = ?", renew, userIdentifier)
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Error updating renew for %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating database", http.StatusInternalServerError)
@@ -726,6 +718,319 @@ func saveConfig(w http.ResponseWriter, configPath string, configData any, logMes
 
 	log.Print(logMessage)
 	return nil
+}
+
+func AddUserHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "Invalid method. Use POST", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Error parsing form data", http.StatusBadRequest)
+			return
+		}
+
+		userIdentifier := r.FormValue("user")
+		credential := r.FormValue("credential")
+		inboundTag := r.FormValue("inboundTag")
+		if userIdentifier == "" || credential == "" {
+			log.Printf("Error: user and credential parameters are missing or empty")
+			http.Error(w, "user and credential are required", http.StatusBadRequest)
+			return
+		}
+		if inboundTag == "" {
+			inboundTag = "vless-in" // Default value
+			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
+		}
+
+		configPath := cfg.CoreConfig
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			log.Printf("Error reading config.json: %v", err)
+			http.Error(w, "Error reading configuration", http.StatusInternalServerError)
+			return
+		}
+
+		proxyType := cfg.CoreType
+		var configData any
+
+		switch proxyType {
+		case "xray":
+			var cfgXray config.ConfigXray
+			if err := json.Unmarshal(data, &cfgXray); err != nil {
+				log.Printf("Error parsing JSON: %v", err)
+				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
+				return
+			}
+
+			found := false
+			for i, inbound := range cfgXray.Inbounds {
+				if inbound.Tag == inboundTag {
+					protocol := inbound.Protocol
+					for _, client := range inbound.Settings.Clients {
+						if protocol == "vless" && client.ID == credential {
+							http.Error(w, `{"error": "User with this id already exists"}`, http.StatusBadRequest)
+							return
+						} else if protocol == "trojan" && client.Password == credential {
+							http.Error(w, `{"error": "User with this password already exists"}`, http.StatusBadRequest)
+							return
+						}
+					}
+					newClient := config.XrayClient{Email: userIdentifier}
+					switch protocol {
+					case "vless":
+						newClient.ID = credential
+					case "trojan":
+						newClient.Password = credential
+					}
+
+					cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, newClient)
+					found = true
+					break
+				}
+			}
+			if !found {
+				http.Error(w, fmt.Sprintf(`{"error": "Inbound with tag %s not found"}`, inboundTag), http.StatusNotFound)
+				return
+			}
+			configData = cfgXray
+
+		case "singbox":
+			var cfgSingBox config.ConfigSingbox
+			if err := json.Unmarshal(data, &cfgSingBox); err != nil {
+				log.Printf("Error parsing JSON: %v", err)
+				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
+				return
+			}
+
+			found := false
+			for i, inbound := range cfgSingBox.Inbounds {
+				protocol := inbound.Type
+				if inbound.Tag == inboundTag {
+					for _, user := range inbound.Users {
+						if protocol == "vless" && user.UUID == credential {
+							http.Error(w, `{"error": "User with this uuid already exists"}`, http.StatusBadRequest)
+							return
+						} else if protocol == "trojan" && user.Password == credential {
+							http.Error(w, `{"error": "User with this password already exists"}`, http.StatusBadRequest)
+							return
+						}
+					}
+					newUser := config.SingboxClient{Name: userIdentifier}
+					switch protocol {
+					case "vless":
+						newUser.UUID = credential
+					case "trojan":
+						newUser.Password = credential
+					}
+
+					cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, newUser)
+					found = true
+					break
+				}
+			}
+			if !found {
+				http.Error(w, fmt.Sprintf(`{"error": "Inbound with tag %s not found"}`, inboundTag), http.StatusNotFound)
+				return
+			}
+			configData = cfgSingBox
+		}
+
+		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s added to configuration with inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+			log.Printf("Failed to add user %s: error saving configuration: %v [%v]", userIdentifier, err, time.Since(start))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		if r.Method != http.MethodDelete {
+			http.Error(w, "Invalid method. Use DELETE", http.StatusMethodNotAllowed)
+			return
+		}
+
+		userIdentifier := r.FormValue("user") // For Xray this is email, for Singbox this is name
+		inboundTag := r.FormValue("inboundTag")
+		if userIdentifier == "" {
+			log.Printf("Error: user parameter is missing or empty")
+			http.Error(w, "user parameter is required", http.StatusBadRequest)
+			return
+		}
+		if inboundTag == "" {
+			inboundTag = "vless-in" // Default value
+			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
+		}
+
+		configPath := cfg.CoreConfig
+		disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+
+		proxyType := cfg.CoreType
+
+		switch proxyType {
+		case "xray":
+			// Read main config
+			mainConfigData, err := os.ReadFile(configPath)
+			if err != nil {
+				log.Printf("Error reading config.json: %v", err)
+				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
+				return
+			}
+			var mainConfig config.ConfigXray
+			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+				log.Printf("Error parsing JSON for config.json: %v", err)
+				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
+				return
+			}
+
+			// Read disabled users config
+			var disabledConfig config.DisabledUsersConfigXray
+			disabledConfigData, err := os.ReadFile(disabledUsersPath)
+			if err == nil && len(disabledConfigData) > 0 {
+				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+					log.Printf("Error parsing JSON for .disabled_users: %v", err)
+					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
+					return
+				}
+			} else {
+				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+			}
+
+			// Function to remove user from inbounds (Xray)
+			removeXrayUser := func(inbounds []config.XrayInbound) ([]config.XrayInbound, bool) {
+				for i, inbound := range inbounds {
+					if inbound.Tag == inboundTag {
+						updatedClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
+						for _, client := range inbound.Settings.Clients {
+							if client.Email != userIdentifier {
+								updatedClients = append(updatedClients, client)
+							}
+						}
+						if len(updatedClients) < len(inbound.Settings.Clients) {
+							inbounds[i].Settings.Clients = updatedClients
+							return inbounds, true
+						}
+					}
+				}
+				return inbounds, false
+			}
+
+			// Check and remove from config.json
+			mainUpdated, removedFromMain := removeXrayUser(mainConfig.Inbounds)
+			if removedFromMain {
+				mainConfig.Inbounds = mainUpdated
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+					return
+				}
+				return
+			}
+
+			// Check and remove from .disabled_users
+			disabledUpdated, removedFromDisabled := removeXrayUser(disabledConfig.Inbounds)
+			if removedFromDisabled {
+				disabledConfig.Inbounds = disabledUpdated
+				if len(disabledConfig.Inbounds) > 0 {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+						return
+					}
+				} else {
+					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+						log.Printf("Error removing empty .disabled_users: %v", err)
+					}
+				}
+				return
+			}
+
+			// If user not found
+			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
+
+		case "singbox":
+			// Read main config Singbox
+			mainConfigData, err := os.ReadFile(configPath)
+			if err != nil {
+				log.Printf("Error reading config.json: %v", err)
+				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
+				return
+			}
+			var mainConfig config.ConfigSingbox
+			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+				log.Printf("Error parsing JSON for config.json: %v", err)
+				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
+				return
+			}
+
+			// Read disabled users config Singbox
+			var disabledConfig config.DisabledUsersConfigSingbox
+			disabledConfigData, err := os.ReadFile(disabledUsersPath)
+			if err == nil && len(disabledConfigData) > 0 {
+				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+					log.Printf("Error parsing JSON for .disabled_users: %v", err)
+					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
+					return
+				}
+			} else {
+				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+			}
+
+			// Function to remove user from inbounds (Singbox)
+			removeSingboxUser := func(inbounds []config.SingboxInbound) ([]config.SingboxInbound, bool) {
+				for i, inbound := range inbounds {
+					if inbound.Tag == inboundTag {
+						updatedUsers := make([]config.SingboxClient, 0, len(inbound.Users))
+						for _, user := range inbound.Users {
+							if user.Name != userIdentifier {
+								updatedUsers = append(updatedUsers, user)
+							}
+						}
+						if len(updatedUsers) < len(inbound.Users) {
+							inbounds[i].Users = updatedUsers
+							return inbounds, true
+						}
+					}
+				}
+				return inbounds, false
+			}
+
+			// Check and remove from config.json
+			mainUpdated, removedFromMain := removeSingboxUser(mainConfig.Inbounds)
+			if removedFromMain {
+				mainConfig.Inbounds = mainUpdated
+				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+					return
+				}
+				return
+			}
+
+			// Check and remove from .disabled_users
+			disabledUpdated, removedFromDisabled := removeSingboxUser(disabledConfig.Inbounds)
+			if removedFromDisabled {
+				disabledConfig.Inbounds = disabledUpdated
+				if len(disabledConfig.Inbounds) > 0 {
+					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+						return
+					}
+				} else {
+					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+						log.Printf("Error removing empty .disabled_users: %v", err)
+					}
+				}
+				return
+			}
+
+			// If user not found
+			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
+		}
+	}
 }
 
 func SetEnabledHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
@@ -776,9 +1081,8 @@ func updateSubscriptionDate(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Conf
 	var subEndStr string
 
 	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", userIdentifier).Scan(&subEndStr)
+	dbMutex.Unlock()
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("error querying database: %v", err)
 	}
