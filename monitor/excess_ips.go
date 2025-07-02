@@ -17,8 +17,9 @@ func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 	currentTime := time.Now().Format("2006/01/02 15:04:05")
 
 	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
 	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
-	dbMutex.Unlock()
 	if err != nil {
 		log.Printf("Ошибка при запросе к таблице clients_stats: %v", err)
 		return fmt.Errorf("ошибка при запросе к базе данных: %v", err)
