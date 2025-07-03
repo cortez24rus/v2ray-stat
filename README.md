@@ -15,17 +15,17 @@ curl -X GET http://127.0.0.1:9952/api/v1/users
   - `mode` (необязательный): Задаёт режим вывода статистики. Возможные значения:
     - `minimal` (по умолчанию): Минимальный набор данных.
       - Для `traffic_stats`: `Source`, `Upload`, `Download`.
-      - Для `clients_stats`: `Email`, `Status`, `Uplink`, `Downlink`.
+      - Для `clients_stats`: `User`, `Status`, `Uplink`, `Downlink`.
     - `standard`: Расширенный набор с данными сессий.
       - Для `traffic_stats`: `Source`, `Sess Up`, `Sess Down`, `Upload`, `Download`.
-      - Для `clients_stats`: `Email`, `Status`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`.
+      - Для `clients_stats`: `User`, `Status`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`.
     - `extended`: Полный набор данных.
       - Для `traffic_stats`: `Source`, `Sess Up`, `Sess Down`, `Upload`, `Download`.
-      - Для `clients_stats`: `Email`, `Status`, `Enabled`, `Sub end`, `Renew`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Lim`, `Ips`.
-  - sort_by (необязательный) — поле для сортировки (email, rate, enabled, sub_end, renew, sess_uplink, sess_downlink, uplink, downlink, lim_ip), по умолчанию email.
+      - Для `clients_stats`: `User`, `Status`, `Enabled`, `Sub end`, `Renew`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Lim`, `Ips`.
+  - sort_by (необязательный) — поле для сортировки (user, rate, enabled, sub_end, renew, sess_uplink, sess_downlink, uplink, downlink, lim_ip), по умолчанию user.
   - sort_order (необязательный) — порядок сортировки: ASC или DESC, по умолчанию ASC.
 ```bash
-curl -X GET "http://127.0.0.1:9952/api/v1/stats?mode=extended&sort_by=email&sort_order=DESC"
+curl -X GET "http://127.0.0.1:9952/api/v1/stats?mode=extended&sort_by=user&sort_order=DESC"
 ```
 
 ### Статистика DNS
