@@ -38,8 +38,8 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 	}
 
 	totalTraffic := formatBytes(uplink + downlink)
-	uploadTraffic := formatBytes(uplink)
-	downloadTraffic := formatBytes(downlink)
+	uplinkTraffic := formatBytes(uplink)
+	downlinkTraffic := formatBytes(downlink)
 
 	serviceStatus := GetStatus(cfg.Services)
 	if serviceStatus == "" {
@@ -58,7 +58,7 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 			"🔸 UDP: %d\n"+
 			"🚦 Traffic: %s (↑%s,↓%s)\n"+
 			"ℹ️ Status: %s",
-		constant.Version, strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uploadTraffic, downloadTraffic, serviceStatus,
+		constant.Version, strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uplinkTraffic, downlinkTraffic, serviceStatus,
 	)
 
 	if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err != nil {

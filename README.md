@@ -78,7 +78,7 @@ curl -X POST http://127.0.0.1:9952/api/v1/add_user -d "user=newuser&credential=t
 - Удалить пользователя по user и inboundTag.
 
 ```bash
-curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?user=newuser&inboundTag=vless-in"`
+curl -X DELETE "http://127.0.0.1:9952/api/v1/delete_user?user=newuser&inboundTag=vless-in"
 ```
 
 ### Включение/отключение пользователя

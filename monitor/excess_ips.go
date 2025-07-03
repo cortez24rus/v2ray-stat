@@ -19,7 +19,7 @@ func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 
 	currentTime := time.Now().Format("2006/01/02 15:04:05")
 
-	rows, err := memDB.Query("SELECT email, lim_ip, ips FROM clients_stats")
+	rows, err := memDB.Query("SELECT user, lim_ip, ips FROM clients_stats")
 	if err != nil {
 		log.Printf("Ошибка при запросе к таблице clients_stats: %v", err)
 		return fmt.Errorf("ошибка при запросе к базе данных: %v", err)
@@ -27,11 +27,11 @@ func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var email, ipAddresses string
+		var user, ipAddresses string
 		var ipLimit int
 
-		if err := rows.Scan(&email, &ipLimit, &ipAddresses); err != nil {
-			log.Printf("Ошибка при чтении строки для email %s: %v", email, err)
+		if err := rows.Scan(&user, &ipLimit, &ipAddresses); err != nil {
+			log.Printf("Ошибка при чтении строки для user %s: %v", user, err)
 			return fmt.Errorf("ошибка при чтении строки: %v", err)
 		}
 
@@ -53,9 +53,9 @@ func logExcessIPs(memDB *sql.DB, dbMutex *sync.Mutex, logFile *os.File) error {
 		if len(filteredIPList) > ipLimit {
 			excessIPs := filteredIPList[ipLimit:]
 			for _, ips := range excessIPs {
-				logData := fmt.Sprintf("%s [LIMIT_IP] Email = %s || SRC = %s\n", currentTime, email, ips)
+				logData := fmt.Sprintf("%s [LIMIT_IP] User = %s || SRC = %s\n", currentTime, user, ips)
 				if _, err := logFile.WriteString(logData); err != nil {
-					log.Printf("Ошибка записи в лог для email %s, IP %s: %v", email, ips, err)
+					log.Printf("Ошибка записи в лог для user %s, IP %s: %v", user, ips, err)
 					return fmt.Errorf("ошибка записи в файл логов: %v", err)
 				}
 			}

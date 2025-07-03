@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	bannedLogRegex = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+(BAN|UNBAN)\s+\[Email\] = (\S+)\s+\[IP\] = (\S+)(?:\s+banned for (\d+) seconds\.)?`)
+	bannedLogRegex = regexp.MustCompile(`(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+(BAN|UNBAN)\s+\[User\] = (\S+)\s+\[IP\] = (\S+)(?:\s+banned for (\d+) seconds\.)?`)
 )
 
 // MonitorBannedLog читает новые записи из файла banned.log и отправляет уведомления в Telegram.
@@ -33,7 +33,7 @@ func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) 
 
 		timestamp := matches[1]
 		action := matches[2]
-		email := matches[3]
+		user := matches[3]
 		ip := matches[4]
 		banDuration := "unknown"
 		if len(matches) == 6 && matches[5] != "" {
@@ -46,12 +46,12 @@ func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) 
 				" Client:   *%s*\n"+
 				" IP:   *%s*\n"+
 				" Time:   *%s*\n"+
-				" Duration:   *%s*", email, ip, timestamp, banDuration)
+				" Duration:   *%s*", user, ip, timestamp, banDuration)
 		} else {
 			message = fmt.Sprintf("✅ IP Unbanned\n\n"+
 				" Client:   *%s*\n"+
 				" IP:   *%s*\n"+
-				" Time:   *%s*", email, ip, timestamp)
+				" Time:   *%s*", user, ip, timestamp)
 		}
 
 		if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {

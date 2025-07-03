@@ -188,16 +188,16 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		}
 		diff := max(current-previous, 0)
 		parts := strings.Fields(key)
-		email := parts[0]
+		user := parts[0]
 		direction := parts[1]
 
 		switch direction {
 		case "uplink":
-			clientUplinkValues[email] = diff
-			clientSessUplinkValues[email] = current
+			clientUplinkValues[user] = diff
+			clientSessUplinkValues[user] = current
 		case "downlink":
-			clientDownlinkValues[email] = diff
-			clientSessDownlinkValues[email] = current
+			clientDownlinkValues[user] = diff
+			clientSessDownlinkValues[user] = current
 		}
 	}
 
@@ -206,32 +206,32 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		if len(parts) != 2 {
 			continue
 		}
-		email := parts[0]
+		user := parts[0]
 		direction := parts[1]
 
 		switch direction {
 		case "uplink":
-			if _, exists := clientSessUplinkValues[email]; !exists {
-				clientSessUplinkValues[email] = 0
-				clientUplinkValues[email] = 0
+			if _, exists := clientSessUplinkValues[user]; !exists {
+				clientSessUplinkValues[user] = 0
+				clientUplinkValues[user] = 0
 			}
 		case "downlink":
-			if _, exists := clientSessDownlinkValues[email]; !exists {
-				clientSessDownlinkValues[email] = 0
-				clientDownlinkValues[email] = 0
+			if _, exists := clientSessDownlinkValues[user]; !exists {
+				clientSessDownlinkValues[user] = 0
+				clientDownlinkValues[user] = 0
 			}
 		}
 	}
 
 	var queries string
-	for email := range clientUplinkValues {
-		uplink := clientUplinkValues[email]
-		downlink := clientDownlinkValues[email]
-		sessUplink := clientSessUplinkValues[email]
-		sessDownlink := clientSessDownlinkValues[email]
+	for user := range clientUplinkValues {
+		uplink := clientUplinkValues[user]
+		downlink := clientDownlinkValues[user]
+		sessUplink := clientSessUplinkValues[user]
+		sessDownlink := clientSessDownlinkValues[user]
 
-		previousUplink, uplinkExists := clientPreviousValues[email+" uplink"]
-		previousDownlink, downlinkExists := clientPreviousValues[email+" downlink"]
+		previousUplink, uplinkExists := clientPreviousValues[user+" uplink"]
+		previousDownlink, downlinkExists := clientPreviousValues[user+" downlink"]
 
 		if !uplinkExists {
 			previousUplink = 0
@@ -246,8 +246,8 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 
 		queries += fmt.Sprintf("UPDATE clients_stats SET "+
 			"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
-			"sess_uplink = %d, sess_downlink = %d WHERE email = '%s';\n",
-			rate, uplink, downlink, sessUplink, sessDownlink, email)
+			"sess_uplink = %d, sess_downlink = %d WHERE user = '%s';\n",
+			rate, uplink, downlink, sessUplink, sessDownlink, user)
 	}
 
 	if queries != "" {
@@ -271,13 +271,13 @@ func stringToInt(s string) int {
 }
 
 func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error {
-	for email, domains := range dnsStats {
+	for user, domains := range dnsStats {
 		for domain, count := range domains {
 			_, err := tx.Exec(`
-                INSERT INTO dns_stats (email, domain, count) 
+                INSERT INTO dns_stats (user, domain, count) 
                 VALUES (?, ?, ?)
-                ON CONFLICT(email, domain) 
-                DO UPDATE SET count = count + ?`, email, domain, count, count)
+                ON CONFLICT(user, domain) 
+                DO UPDATE SET count = count + ?`, user, domain, count, count)
 			if err != nil {
 				log.Printf("Ошибка при пакетном обновлении dns_stats: %v", err)
 				return fmt.Errorf("error during batch update of dns_stats: %v", err)
@@ -293,39 +293,39 @@ func processLogLine(line string, dnsStats map[string]map[string]int, cfg *config
 		return "", nil, false
 	}
 
-	var email, domain, ip string
+	var user, domain, ip string
 	if len(matches) == 4 {
 		ip = matches[1]
 		domain = strings.TrimSpace(matches[2])
-		email = strings.TrimSpace(matches[3])
+		user = strings.TrimSpace(matches[3])
 	} else {
-		email = strings.TrimSpace(matches[1])
+		user = strings.TrimSpace(matches[1])
 		ip = strings.TrimSpace(matches[2])
 		domain = ""
 	}
 
 	uniqueEntriesMutex.Lock()
-	if uniqueEntries[email] == nil {
-		uniqueEntries[email] = make(map[string]time.Time)
+	if uniqueEntries[user] == nil {
+		uniqueEntries[user] = make(map[string]time.Time)
 	}
-	uniqueEntries[email][ip] = time.Now()
+	uniqueEntries[user][ip] = time.Now()
 
 	validIPs := []string{}
-	for ip, timestamp := range uniqueEntries[email] {
+	for ip, timestamp := range uniqueEntries[user] {
 		if time.Since(timestamp) <= 66*time.Second {
 			validIPs = append(validIPs, ip)
 		}
 	}
 	uniqueEntriesMutex.Unlock()
 
-	if dnsStats[email] == nil {
-		dnsStats[email] = make(map[string]int)
+	if dnsStats[user] == nil {
+		dnsStats[user] = make(map[string]int)
 	}
 	if domain != "" {
-		dnsStats[email][domain]++
+		dnsStats[user][domain]++
 	}
 
-	return email, validIPs, true
+	return user, validIPs, true
 }
 
 func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int64, cfg *config.Config) {
@@ -345,10 +345,10 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 	ipUpdates := make(map[string][]string)
 
 	for scanner.Scan() {
-		email, validIPs, ok := processLogLine(scanner.Text(), dnsStats, cfg)
+		user, validIPs, ok := processLogLine(scanner.Text(), dnsStats, cfg)
 		if ok {
-			ipUpdates[email] = validIPs
-			// log.Printf("DEBUG: Добавлено в ipUpdates: email=%s, validIPs=%v", email, validIPs)
+			ipUpdates[user] = validIPs
+			// log.Printf("DEBUG: Добавлено в ipUpdates: user=%s, validIPs=%v", user, validIPs)
 		}
 	}
 
@@ -359,9 +359,9 @@ func readNewLines(memDB *sql.DB, dbMutex *sync.Mutex, file *os.File, offset *int
 	}
 
 	// Обновление IP-адресов в базе
-	for email, validIPs := range ipUpdates {
-		// log.Printf("DEBUG: Вызов UpdateIPInDB для email=%s с validIPs=%v", email, validIPs)
-		if err := db.UpdateIPInDB(tx, email, validIPs); err != nil {
+	for user, validIPs := range ipUpdates {
+		// log.Printf("DEBUG: Вызов UpdateIPInDB для user=%s с validIPs=%v", user, validIPs)
+		if err := db.UpdateIPInDB(tx, user, validIPs); err != nil {
 			log.Printf("Error updating IP in database: %v", err)
 			tx.Rollback()
 			return

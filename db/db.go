@@ -31,7 +31,7 @@ var (
 )
 
 func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
-	// Карта для уникальных пользователей по email
+	// Карта для уникальных пользователей по user
 	clientMap := make(map[string]config.XrayClient)
 
 	// Функция для извлечения пользователей из inbounds
@@ -133,7 +133,7 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	}
 
 	start := time.Now()
-	var addedEmails []string
+	var addedUsers []string
 	currentTime := time.Now().Format("2006-01-02-15")
 
 	dbMutex.Lock()
@@ -144,7 +144,7 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 		return fmt.Errorf("error starting transaction: %v", err)
 	}
 
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(email, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(user, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
 	if err != nil {
 		tx.Rollback()
 		return fmt.Errorf("error preparing statement: %v", err)
@@ -164,7 +164,7 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 			return fmt.Errorf("error getting RowsAffected for client %s: %v", client.Email, err)
 		}
 		if rowsAffected > 0 {
-			addedEmails = append(addedEmails, client.Email)
+			addedUsers = append(addedUsers, client.Email)
 		}
 	}
 
@@ -172,8 +172,8 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 		return fmt.Errorf("error committing transaction: %v", err)
 	}
 
-	if len(addedEmails) > 0 {
-		log.Printf("Users successfully added to database: %s [%v]", strings.Join(addedEmails, ", "), time.Since(start))
+	if len(addedUsers) > 0 {
+		log.Printf("Users successfully added to database: %s [%v]", strings.Join(addedUsers, ", "), time.Since(start))
 	}
 
 	return nil
@@ -193,7 +193,7 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	rows, err := memDB.Query("SELECT email FROM clients_stats")
+	rows, err := memDB.Query("SELECT user FROM clients_stats")
 	if err != nil {
 		return fmt.Errorf("error executing query: %v", err)
 	}
@@ -201,15 +201,15 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 
 	var usersDB []string
 	for rows.Next() {
-		var email string
-		if err := rows.Scan(&email); err != nil {
+		var user string
+		if err := rows.Scan(&user); err != nil {
 			return fmt.Errorf("error scanning row: %v", err)
 		}
-		usersDB = append(usersDB, email)
+		usersDB = append(usersDB, user)
 	}
 
 	var Queries string
-	var deletedEmails []string
+	var deletedUsers []string
 	for _, user := range usersDB {
 		found := false
 		for _, xrayUser := range clients {
@@ -219,8 +219,8 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 			}
 		}
 		if !found {
-			Queries += fmt.Sprintf("DELETE FROM clients_stats WHERE email = '%s'; ", user)
-			deletedEmails = append(deletedEmails, user)
+			Queries += fmt.Sprintf("DELETE FROM clients_stats WHERE user = '%s'; ", user)
+			deletedUsers = append(deletedUsers, user)
 		}
 	}
 
@@ -229,23 +229,23 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 		if err != nil {
 			return fmt.Errorf("error executing transaction: %v", err)
 		}
-		log.Printf("Users successfully deleted from database: %s [%v]", strings.Join(deletedEmails, ", "), time.Since(start))
+		log.Printf("Users successfully deleted from database: %s [%v]", strings.Join(deletedUsers, ", "), time.Since(start))
 	}
 
 	return nil
 }
 
-func UpdateIPInDB(tx *sql.Tx, email string, ipList []string) error {
+func UpdateIPInDB(tx *sql.Tx, user string, ipList []string) error {
 	ipStr := strings.Join(ipList, ",")
-	query := `UPDATE clients_stats SET ips = ? WHERE email = ?`
-	_, err := tx.Exec(query, ipStr, email)
+	query := `UPDATE clients_stats SET ips = ? WHERE user = ?`
+	_, err := tx.Exec(query, ipStr, user)
 	if err != nil {
 		return fmt.Errorf("error updating data: %v", err)
 	}
 	return nil
 }
 
-func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, email string, enabled bool) {
+func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, user string, enabled bool) {
 	enabledStr := "false"
 	if enabled {
 		enabledStr = "true"
@@ -254,11 +254,11 @@ func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, email string, enabled
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE email = ?", enabledStr, email)
+	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE user = ?", enabledStr, user)
 	if err != nil {
-		log.Printf("Error updating database for email %s: %v", email, err)
+		log.Printf("Error updating database for user %s: %v", user, err)
 	} else {
-		// log.Printf("Updated enabled status for %s to %s", email, enabledStr)
+		// log.Printf("Updated enabled status for %s to %s", user, enabledStr)
 	}
 }
 
@@ -300,7 +300,7 @@ func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
 	return newDate, nil
 }
 
-func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, baseDate time.Time) error {
+func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, user, offset string, baseDate time.Time) error {
 	start := time.Now()
 	offset = strings.TrimSpace(offset)
 
@@ -308,11 +308,11 @@ func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, 
 	defer dbMutex.Unlock()
 
 	if offset == "0" {
-		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE email = ?", email)
+		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE user = ?", user)
 		if err != nil {
 			return fmt.Errorf("error updating database: %v", err)
 		}
-		log.Printf("Unlimited time restriction set for email %s", email)
+		log.Printf("Unlimited time restriction set for user %s", user)
 		return nil
 	}
 
@@ -321,12 +321,12 @@ func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, email, offset string, 
 		return fmt.Errorf("invalid offset format: %v", err)
 	}
 
-	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE email = ?", newDate.Format("2006-01-02-15"), email)
+	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE user = ?", newDate.Format("2006-01-02-15"), user)
 	if err != nil {
 		return fmt.Errorf("error updating database: %v", err)
 	}
 
-	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s) [%v]", email, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset, time.Since(start))
+	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s) [%v]", user, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset, time.Since(start))
 	return nil
 }
 
@@ -336,7 +336,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
 
-	rows, err := memDB.Query("SELECT email, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
+	rows, err := memDB.Query("SELECT user, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
 	if err != nil {
 		log.Printf("Error querying database: %v", err)
 		return
@@ -344,7 +344,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 	defer rows.Close()
 
 	type subscription struct {
-		Email   string
+		User    string
 		SubEnd  string
 		UUID    string
 		Enabled string
@@ -354,7 +354,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 
 	for rows.Next() {
 		var s subscription
-		err := rows.Scan(&s.Email, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
+		err := rows.Scan(&s.User, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
 		if err != nil {
 			log.Printf("Error scanning row: %v", err)
 			continue
@@ -371,7 +371,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 		if s.SubEnd != "" {
 			subEnd, err := time.Parse("2006-01-02-15", s.SubEnd)
 			if err != nil {
-				log.Printf("Error parsing date for %s: %v", s.Email, err)
+				log.Printf("Error parsing date for %s: %v", s.User, err)
 				continue
 			}
 
@@ -379,69 +379,69 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatID != ""
 
 				notifiedMutex.Lock()
-				if canSendNotifications && !notifiedUsers[s.Email] {
+				if canSendNotifications && !notifiedUsers[s.User] {
 					formattedDate := formatDate(s.SubEnd)
 					message := fmt.Sprintf("❌ Subscription expired\n\n"+
 						"Client:   *%s*\n"+
-						"Expiration date:   *%s*", s.Email, formattedDate)
+						"Expiration date:   *%s*", s.User, formattedDate)
 					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
-						notifiedUsers[s.Email] = true
+						notifiedUsers[s.User] = true
 					}
 				}
 				notifiedMutex.Unlock()
 
 				if s.Renew >= 1 {
 					offset := fmt.Sprintf("%d", s.Renew)
-					err = AdjustDateOffset(memDB, dbMutex, s.Email, offset, start)
+					err = AdjustDateOffset(memDB, dbMutex, s.User, offset, start)
 					if err != nil {
-						log.Printf("Error renewing subscription for %s: %v", s.Email, err)
+						log.Printf("Error renewing subscription for %s: %v", s.User, err)
 						continue
 					}
-					log.Printf("Auto-renewed subscription for user %s for %d days", s.Email, s.Renew)
+					log.Printf("Auto-renewed subscription for user %s for %d days", s.User, s.Renew)
 
 					if canSendNotifications {
 						notifiedMutex.Lock()
 						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
 							"Client:   *%s*\n"+
-							"Renewed for:   *%d days*", s.Email, s.Renew)
+							"Renewed for:   *%d days*", s.User, s.Renew)
 						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
-							renewNotifiedUsers[s.Email] = true
+							renewNotifiedUsers[s.User] = true
 						}
 						notifiedMutex.Unlock()
 					}
 
 					notifiedMutex.Lock()
-					notifiedUsers[s.Email] = false
-					renewNotifiedUsers[s.Email] = false
+					notifiedUsers[s.User] = false
+					renewNotifiedUsers[s.User] = false
 					notifiedMutex.Unlock()
 
 					if s.Enabled == "false" {
-						err = ToggleUserEnabled(s.Email, true, cfg, memDB, dbMutex)
+						err = ToggleUserEnabled(s.User, true, cfg, memDB, dbMutex)
 						if err != nil {
-							log.Printf("Error enabling user %s: %v", s.Email, err)
+							log.Printf("Error enabling user %s: %v", s.User, err)
 							continue
 						}
-						UpdateEnabledInDB(memDB, dbMutex, s.Email, true)
-						log.Printf("User %s enabled", s.Email)
+						UpdateEnabledInDB(memDB, dbMutex, s.User, true)
+						log.Printf("User %s enabled", s.User)
 					}
 				} else if s.Enabled == "true" {
-					err = ToggleUserEnabled(s.Email, false, cfg, memDB, dbMutex)
+					err = ToggleUserEnabled(s.User, false, cfg, memDB, dbMutex)
 					if err != nil {
-						log.Printf("Error disabling user %s: %v", s.Email, err)
+						log.Printf("Error disabling user %s: %v", s.User, err)
 					} else {
-						log.Printf("User %s disabled", s.Email)
+						log.Printf("User %s disabled", s.User)
 					}
-					UpdateEnabledInDB(memDB, dbMutex, s.Email, false)
+					UpdateEnabledInDB(memDB, dbMutex, s.User, false)
 				}
 			} else {
 				if s.Enabled == "false" {
-					err = ToggleUserEnabled(s.Email, true, cfg, memDB, dbMutex)
+					err = ToggleUserEnabled(s.User, true, cfg, memDB, dbMutex)
 					if err != nil {
-						log.Printf("Error enabling user %s: %v", s.Email, err)
+						log.Printf("Error enabling user %s: %v", s.User, err)
 						continue
 					}
-					UpdateEnabledInDB(memDB, dbMutex, s.Email, true)
-					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.Email, s.SubEnd)
+					UpdateEnabledInDB(memDB, dbMutex, s.User, true)
+					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.User, s.SubEnd)
 				}
 			}
 		}
@@ -589,13 +589,13 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 			targetInbounds = mainConfig.Inbounds
 		}
 
-		// Collect users for Xray with deduplication by email and inbound tag
+		// Collect users for Xray with deduplication by user and inbound tag
 		userMap := make(map[string]config.XrayClient) // Map tag -> client
 		found := false
 		for i, inbound := range sourceInbounds {
 			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
 				newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
-				clientMap := make(map[string]bool) // Track unique emails in inbound
+				clientMap := make(map[string]bool) // Track unique users in inbound
 				for _, client := range inbound.Settings.Clients {
 					if client.Email == userIdentifier {
 						if !clientMap[client.Email] {
@@ -636,9 +636,9 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					clientMap := make(map[string]bool)
 					newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients)+1)
 					for _, c := range inbound.Settings.Clients {
-						if !clientMap[c.Email] {
+						if !clientMap[client.Email] {
 							newClients = append(newClients, c)
-							clientMap[c.Email] = true
+							clientMap[client.Email] = true
 						}
 					}
 					if !clientMap[userIdentifier] {
@@ -939,7 +939,7 @@ func InitDB(db *sql.DB, dbType string) error {
 		PRAGMA cache_size = 2000;
 		PRAGMA journal_mode = MEMORY;
 		CREATE TABLE IF NOT EXISTS clients_stats (
-			email TEXT PRIMARY KEY,
+			user TEXT PRIMARY KEY,
 			uuid TEXT,
 			rate INTEGER DEFAULT 0,
 			enabled TEXT,
@@ -961,10 +961,10 @@ func InitDB(db *sql.DB, dbType string) error {
 			sess_downlink INTEGER DEFAULT 0
 		);
 		CREATE TABLE IF NOT EXISTS dns_stats (
-			email TEXT NOT NULL,
+			user TEXT NOT NULL,
 			count INTEGER DEFAULT 1,
 			domain TEXT NOT NULL,
-			PRIMARY KEY (email, domain)
+			PRIMARY KEY (user, domain)
 		);
 	`)
 	if err != nil {
@@ -973,7 +973,7 @@ func InitDB(db *sql.DB, dbType string) error {
 
 	// Создание индексов для таблицы clients_stats
 	indexQueries := []string{
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_email ON clients_stats(email)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_user ON clients_stats(user)",
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate)",
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled)",
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end)",

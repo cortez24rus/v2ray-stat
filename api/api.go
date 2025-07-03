@@ -16,11 +16,12 @@ import (
 
 	"v2ray-stat/config"
 	"v2ray-stat/db"
+	"v2ray-stat/lua"
 	"v2ray-stat/stats"
 )
 
 type User struct {
-	Email         string `json:"email"`
+	User          string `json:"user"`
 	Uuid          string `json:"uuid"`
 	Rate          string `json:"rate"`
 	Enabled       string `json:"enabled"`
@@ -52,7 +53,7 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
-		rows, err := memDB.Query("SELECT email, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
+		rows, err := memDB.Query("SELECT user, uuid, rate, enabled, created, sub_end, renew, lim_ip, ips, uplink, downlink, sess_uplink, sess_downlink FROM clients_stats")
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -63,7 +64,7 @@ func UsersHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		var users []User
 		for rows.Next() {
 			var user User
-			if err := rows.Scan(&user.Email, &user.Uuid, &user.Rate, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
+			if err := rows.Scan(&user.User, &user.Uuid, &user.Rate, &user.Enabled, &user.Created, &user.Sub_end, &user.Renew, &user.Lim_ip, &user.Ips, &user.Uplink, &user.Downlink, &user.Sess_uplink, &user.Sess_downlink); err != nil {
 				log.Printf("Error reading result: %v", err)
 				http.Error(w, "Error processing data", http.StatusInternalServerError)
 				return
@@ -242,21 +243,21 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	case "minimal":
 		serverQuery = `
             SELECT source AS "Source", 
-				uplink AS "Upload", 
-				downlink AS "Download"
+				uplink AS "Uplink", 
+				downlink AS "Downlink"
             FROM traffic_stats;
         `
-		trafficColsServer = []string{"Upload", "Download"}
+		trafficColsServer = []string{"Uplink", "Downlink"}
 	case "standard", "extended":
 		serverQuery = `
             SELECT source AS "Source", 
 				sess_uplink AS "Sess Up", 
 				sess_downlink AS "Sess Down",
-				uplink AS "Upload", 
-				downlink AS "Download"
+				uplink AS "Uplink", 
+				downlink AS "Downlink"
             FROM traffic_stats;
         `
-		trafficColsServer = []string{"Sess Up", "Sess Down", "Upload", "Download"}
+		trafficColsServer = []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
 	rows, err := memDB.Query(serverQuery)
@@ -275,13 +276,13 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	switch mode {
 	case "minimal":
 		clientQuery = fmt.Sprintf(`
-            SELECT email AS "Email", rate AS "Rate", uplink AS "Uplink", downlink AS "Downlink"
+            SELECT user AS "User", rate AS "Rate", uplink AS "Uplink", downlink AS "Downlink"
             FROM clients_stats
             ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "standard":
 		clientQuery = fmt.Sprintf(`
-            SELECT email AS "Email", 
+            SELECT user AS "User", 
 				rate AS "Rate", 
 				sess_uplink AS "Sess Up", 
 				sess_downlink AS "Sess Down",
@@ -292,7 +293,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "extended":
 		clientQuery = fmt.Sprintf(`
-            SELECT email AS "Email", 
+            SELECT user AS "User", 
 				rate AS "Rate", 
 				enabled AS "Enabled", 
 				sub_end AS "Sub end",
@@ -341,13 +342,13 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		// Проверяем параметр sort_by
 		sortBy := r.URL.Query().Get("sort_by")
-		validSortColumns := []string{"email", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
+		validSortColumns := []string{"user", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
 		if !contains(validSortColumns, sortBy) {
 			if sortBy != "" {
 				http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)
 				return
 			}
-			sortBy = "email"
+			sortBy = "user"
 		}
 
 		// Проверяем параметр sort_order
@@ -413,11 +414,11 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 			return
 		}
 
-		email := r.URL.Query().Get("email")
+		user := r.URL.Query().Get("user")
 		count := r.URL.Query().Get("count")
 
-		if email == "" {
-			http.Error(w, "Missing email parameter", http.StatusBadRequest)
+		if user == "" {
+			http.Error(w, "Missing user parameter", http.StatusBadRequest)
 			return
 		}
 
@@ -434,14 +435,14 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		defer dbMutex.Unlock()
 
 		stats := " 📊 DNS Query Statistics:\n"
-		stats += fmt.Sprintf("%-12s %-6s %-s\n", "Email", "Count", "Domain")
+		stats += fmt.Sprintf("%-12s %-6s %-s\n", "User", "Count", "Domain")
 		stats += "-------------------------------------------------------------\n"
 		rows, err := memDB.Query(`
-			SELECT email AS "Email", count AS "Count", domain AS "Domain"
+			SELECT user AS "User", count AS "Count", domain AS "Domain"
 			FROM dns_stats
-			WHERE email = ?
+			WHERE user = ?
 			ORDER BY count DESC
-			LIMIT ?`, email, count)
+			LIMIT ?`, user, count)
 		if err != nil {
 			log.Printf("Error executing SQL query: %v", err)
 			http.Error(w, "Error executing query", http.StatusInternalServerError)
@@ -450,14 +451,14 @@ func DnsStatsHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		defer rows.Close()
 
 		for rows.Next() {
-			var email, domain string
+			var user, domain string
 			var count int
-			if err := rows.Scan(&email, &count, &domain); err != nil {
+			if err := rows.Scan(&user, &count, &domain); err != nil {
 				log.Printf("Error reading result: %v", err)
 				http.Error(w, "Error processing data", http.StatusInternalServerError)
 				return
 			}
-			stats += fmt.Sprintf("%-12s %-6d %-s\n", email, count, domain)
+			stats += fmt.Sprintf("%-12s %-6d %-s\n", user, count, domain)
 		}
 
 		fmt.Fprintln(w, stats)
@@ -513,7 +514,7 @@ func UpdateIPLimitHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
-		query := "UPDATE clients_stats SET lim_ip = ? WHERE email = ?"
+		query := "UPDATE clients_stats SET lim_ip = ? WHERE user = ?"
 		result, err := memDB.Exec(query, ipLimitInt, userIdentifier)
 		if err != nil {
 			log.Printf("Error updating lim_ip for user %s: %v", userIdentifier, err)
@@ -684,7 +685,7 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 		dbMutex.Lock()
 		defer dbMutex.Unlock()
 
-		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE email = ?", renew, userIdentifier)
+		result, err := memDB.Exec("UPDATE clients_stats SET renew = ? WHERE user = ?", renew, userIdentifier)
 		if err != nil {
 			log.Printf("Error updating renew for %s: %v", userIdentifier, err)
 			http.Error(w, "Error updating database", http.StatusInternalServerError)
@@ -852,6 +853,12 @@ func AddUserHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
+		if cfg.Features["auth_lua"] {
+			if err := lua.AddUserToAuthLua(cfg, userIdentifier, credential); err != nil {
+				log.Printf("Failed to add user %s to auth.lua: %v", userIdentifier, err)
+			}
+		}
+
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -866,7 +873,7 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		userIdentifier := r.FormValue("user") // For Xray this is email, for Singbox this is name
+		userIdentifier := r.FormValue("user") // For Xray this is user, for Singbox this is name
 		inboundTag := r.FormValue("inboundTag")
 		if userIdentifier == "" {
 			log.Printf("Error: user parameter is missing or empty")
@@ -938,6 +945,14 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 					return
 				}
+
+				if cfg.Features["auth_lua"] {
+					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
+						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
+					} else {
+						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
+					}
+				}
 				return
 			}
 
@@ -952,6 +967,14 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Error removing empty .disabled_users: %v", err)
+					}
+				}
+
+				if cfg.Features["auth_lua"] {
+					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
+						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
+					} else {
+						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
 					}
 				}
 				return
@@ -1014,6 +1037,14 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
 					return
 				}
+
+				if cfg.Features["auth_lua"] {
+					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
+						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
+					} else {
+						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
+					}
+				}
 				return
 			}
 
@@ -1028,6 +1059,14 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 				} else {
 					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
 						log.Printf("Error removing empty .disabled_users: %v", err)
+					}
+				}
+
+				if cfg.Features["auth_lua"] {
+					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
+						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
+					} else {
+						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
 					}
 				}
 				return
@@ -1086,7 +1125,7 @@ func updateSubscriptionDate(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Conf
 	baseDate := time.Now().UTC()
 	var subEndStr string
 
-	err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE email = ?", userIdentifier).Scan(&subEndStr)
+	err := memDB.QueryRow("SELECT sub_end FROM clients_stats WHERE user = ?", userIdentifier).Scan(&subEndStr)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("error querying database: %v", err)
 	}

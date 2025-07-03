@@ -20,6 +20,7 @@ type Config struct {
 	DatabasePath          string
 	V2LogFile             string
 	BannedLogFile         string
+	AuthLuaPath           string
 	AccessLogPath         string
 	AccessLogRegex        string
 	IpTtl                 time.Duration
@@ -42,6 +43,7 @@ var defaultConfig = Config{
 	DatabasePath:          "/usr/local/v2ray-stat/data.db",
 	V2LogFile:             "/var/log/v2ray-stat.log",
 	BannedLogFile:         "/var/log/v2ray-stat-banned.log",
+	AuthLuaPath:           "/etc/haproxy/.auth.lua",
 	AccessLogPath:         "/usr/local/etc/xray/access.log",
 	AccessLogRegex:        `from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)`,
 	IpTtl:                 66 * time.Second,
@@ -115,6 +117,10 @@ func LoadConfig(configFile string) (Config, error) {
 		case "BANNED_LOG_FILE":
 			if value != "" {
 				cfg.BannedLogFile = value
+			}
+		case "AUTH_LUA_PATH":
+			if value != "" {
+				cfg.AuthLuaPath = value
 			}
 		case "ACCESS_LOG_PATH":
 			if value != "" {
