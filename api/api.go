@@ -248,7 +248,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
             FROM traffic_stats;
         `
 		trafficColsServer = []string{"Uplink", "Downlink"}
-	case "standard", "extended":
+	case "standard", "extended", "full":
 		serverQuery = `
             SELECT source AS "Source", 
 				sess_uplink AS "Sess Up", 
