@@ -13,6 +13,7 @@ import (
 
 // Config holds the configuration settings for the application.
 type Config struct {
+	Timezone              string
 	CoreType              string
 	Port                  string
 	CoreDir               string
@@ -37,6 +38,7 @@ type Config struct {
 
 // defaultConfig provides default configuration values.
 var defaultConfig = Config{
+	Timezone:              "",
 	CoreType:              "xray",
 	Port:                  "9952",
 	CoreDir:               "/usr/local/etc/xray/",
@@ -197,6 +199,15 @@ func LoadConfig(configFile string) (Config, error) {
 		case "API_TOKEN":
 			if value != "" {
 				cfg.APIToken = value
+			}
+		case "TIMEZONE":
+			if value != "" {
+				// Проверяем, является ли таймзона валидной
+				if _, err := time.LoadLocation(value); err != nil {
+					log.Printf("Invalid TIMEZONE value '%s', using default (empty)", value)
+				} else {
+					cfg.Timezone = value
+				}
 			}
 		default:
 			log.Printf("Warning: unknown configuration key: %s", key)

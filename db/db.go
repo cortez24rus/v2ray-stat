@@ -935,38 +935,39 @@ func InitDB(db *sql.DB, dbType string) error {
 		return nil // Таблицы уже существуют, инициализация не требуется
 	}
 
-	_, err = db.Exec(`	
-		PRAGMA cache_size = 2000;
-		PRAGMA journal_mode = MEMORY;
-		CREATE TABLE IF NOT EXISTS clients_stats (
-			user TEXT PRIMARY KEY,
-			uuid TEXT,
-			rate INTEGER DEFAULT 0,
-			enabled TEXT,
-			created TEXT,
-			sub_end TEXT DEFAULT '',
-			renew INTEGER DEFAULT 0,
-			lim_ip INTEGER DEFAULT 0,
-			ips TEXT DEFAULT '',
-			uplink INTEGER DEFAULT 0,
-			downlink INTEGER DEFAULT 0,
-			sess_uplink INTEGER DEFAULT 0,
-			sess_downlink INTEGER DEFAULT 0
-		);
-		CREATE TABLE IF NOT EXISTS traffic_stats (
-			source TEXT PRIMARY KEY,
-			uplink INTEGER DEFAULT 0,
-			downlink INTEGER DEFAULT 0,
-			sess_uplink INTEGER DEFAULT 0,
-			sess_downlink INTEGER DEFAULT 0
-		);
-		CREATE TABLE IF NOT EXISTS dns_stats (
-			user TEXT NOT NULL,
-			count INTEGER DEFAULT 1,
-			domain TEXT NOT NULL,
-			PRIMARY KEY (user, domain)
-		);
-	`)
+	_, err = db.Exec(`
+        PRAGMA cache_size = 2000;
+        PRAGMA journal_mode = MEMORY;
+        CREATE TABLE IF NOT EXISTS clients_stats (
+            user TEXT PRIMARY KEY,
+            uuid TEXT,
+            rate INTEGER DEFAULT 0,
+            enabled TEXT,
+            created TEXT,
+            sub_end TEXT DEFAULT '',
+            renew INTEGER DEFAULT 0,
+            lim_ip INTEGER DEFAULT 0,
+            ips TEXT DEFAULT '',
+            uplink INTEGER DEFAULT 0,
+            downlink INTEGER DEFAULT 0,
+            sess_uplink INTEGER DEFAULT 0,
+            sess_downlink INTEGER DEFAULT 0,
+            last_seen TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS traffic_stats (
+            source TEXT PRIMARY KEY,
+            uplink INTEGER DEFAULT 0,
+            downlink INTEGER DEFAULT 0,
+            sess_uplink INTEGER DEFAULT 0,
+            sess_downlink INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS dns_stats (
+            user TEXT NOT NULL,
+            count INTEGER DEFAULT 1,
+            domain TEXT NOT NULL,
+            PRIMARY KEY (user, domain)
+        );
+    `)
 	if err != nil {
 		return fmt.Errorf("error executing SQL query: %v", err)
 	}
@@ -984,6 +985,7 @@ func InitDB(db *sql.DB, dbType string) error {
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink)",
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip)",
 		"CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips)",
+		"CREATE INDEX IF NOT EXISTS idx_clients_stats_last_seen ON clients_stats(last_seen)",
 	}
 
 	for _, indexQuery := range indexQueries {

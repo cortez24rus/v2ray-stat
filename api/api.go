@@ -276,32 +276,41 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	switch mode {
 	case "minimal":
 		clientQuery = fmt.Sprintf(`
-            SELECT user AS "User", rate AS "Rate", uplink AS "Uplink", downlink AS "Downlink"
+            SELECT user AS "User", 
+				last_seen AS "Last seen",
+				rate AS "Rate", 
+				uplink AS "Uplink", 
+				downlink AS "Downlink"
             FROM clients_stats
             ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "standard":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
+				last_seen AS "Last seen",
 				rate AS "Rate", 
-				sess_uplink AS "Sess Up", 
-				sess_downlink AS "Sess Down",
                 uplink AS "Uplink", 
-				downlink AS "Downlink"
+				downlink AS "Downlink", 
+				enabled AS "Enabled", 
+				sub_end AS "Sub end",
+                renew AS "Renew", 
+				lim_ip AS "Lim", 
+				ips AS "Ips"
             FROM clients_stats
 			ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "extended":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
+				last_seen AS "Last seen",
 				rate AS "Rate", 
-				enabled AS "Enabled", 
-				sub_end AS "Sub end",
-                renew AS "Renew", 
 				sess_uplink AS "Sess Up", 
 				sess_downlink AS "Sess Down",
                 uplink AS "Uplink", 
 				downlink AS "Downlink", 
+				enabled AS "Enabled", 
+				sub_end AS "Sub end",
+                renew AS "Renew", 
 				lim_ip AS "Lim", 
 				ips AS "Ips"
             FROM clients_stats
@@ -311,14 +320,15 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
 				uuid AS "ID",
-				rate AS "Rate", 
-				enabled AS "Enabled", 
-				sub_end AS "Sub end",
-                renew AS "Renew", 
+				last_seen AS "Last seen",
+				rate AS "Rate",
 				sess_uplink AS "Sess Up", 
 				sess_downlink AS "Sess Down",
                 uplink AS "Uplink", 
 				downlink AS "Downlink", 
+				enabled AS "Enabled", 
+				sub_end AS "Sub end",
+                renew AS "Renew", 
 				lim_ip AS "Lim", 
 				ips AS "Ips"
             FROM clients_stats

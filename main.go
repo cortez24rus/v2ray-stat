@@ -31,7 +31,31 @@ var (
 	uniqueEntriesMutex  sync.Mutex
 	previousStats       string
 	clientPreviousStats string
+
+	// Хранит время последнего ненулевого трафика для каждого пользователя
+	lastTrafficTime      = make(map[string]time.Time)
+	lastTrafficTimeMutex sync.Mutex
+
+	// Хранит статус неактивности пользователя
+	isInactive      = make(map[string]bool)
+	isInactiveMutex sync.Mutex
+
+	timeLocation *time.Location
 )
+
+func initTimezone(cfg *config.Config) {
+	if cfg.Timezone != "" {
+		loc, err := time.LoadLocation(cfg.Timezone)
+		if err != nil {
+			log.Printf("Некорректная TIMEZONE '%s', используется системная: %v", cfg.Timezone, err)
+			timeLocation = time.Local
+		} else {
+			timeLocation = loc
+		}
+	} else {
+		timeLocation = time.Local
+	}
+}
 
 func extractProxyTraffic(apiData *api.ApiResponse) []string {
 	var result []string
@@ -70,14 +94,14 @@ func splitAndCleanName(name string) []string {
 }
 
 func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
 		return
 	}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 
 	currentValues := make(map[string]int)
 	previousValues := make(map[string]int)
@@ -147,14 +171,14 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 }
 
 func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	clientCurrentStats := extractUserTraffic(apiData)
 	if clientPreviousStats == "" {
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
 		return
 	}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 
 	clientCurrentValues := make(map[string]int)
 	clientPreviousValues := make(map[string]int)
@@ -223,7 +247,12 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		}
 	}
 
+	currentTime := time.Now().In(timeLocation)
 	var queries string
+
+	lastTrafficTimeMutex.Lock()
+	isInactiveMutex.Lock()
+
 	for user := range clientUplinkValues {
 		uplink := clientUplinkValues[user]
 		downlink := clientDownlinkValues[user]
@@ -244,11 +273,38 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		downlinkOnline := max(sessDownlink-previousDownlink, 0)
 		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
 
-		queries += fmt.Sprintf("UPDATE clients_stats SET "+
-			"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
-			"sess_uplink = %d, sess_downlink = %d WHERE user = '%s';\n",
-			rate, uplink, downlink, sessUplink, sessDownlink, user)
+		lastSeen := ""
+
+		if rate > 0 {
+			lastSeen = "online"
+			lastTrafficTime[user] = currentTime
+			isInactive[user] = false
+		} else {
+			if lastTime, exists := lastTrafficTime[user]; exists {
+				if time.Since(lastTime) >= 1*time.Minute && !isInactive[user] {
+					lastSeen = currentTime.Truncate(time.Minute).Format("2006-01-02 15:04")
+					isInactive[user] = true
+				}
+			} else {
+				// Для нового пользователя без трафика last_seen не устанавливается
+			}
+		}
+
+		if lastSeen != "" {
+			queries += fmt.Sprintf("UPDATE clients_stats SET "+
+				"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
+				"sess_uplink = %d, sess_downlink = %d, last_seen = '%s' WHERE user = '%s';\n",
+				rate, uplink, downlink, sessUplink, sessDownlink, lastSeen, user)
+		} else {
+			queries += fmt.Sprintf("UPDATE clients_stats SET "+
+				"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
+				"sess_uplink = %d, sess_downlink = %d WHERE user = '%s';\n",
+				rate, uplink, downlink, sessUplink, sessDownlink, user)
+		}
 	}
+
+	lastTrafficTimeMutex.Unlock()
+	isInactiveMutex.Unlock()
 
 	if queries != "" {
 		_, err := memDB.Exec(queries)
@@ -541,6 +597,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
+
+	initTimezone(&cfg)
 
 	// Инициализация базы данных
 	var dbMutex sync.Mutex
