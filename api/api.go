@@ -307,6 +307,23 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
             FROM clients_stats
 			ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
+	case "full":
+		clientQuery = fmt.Sprintf(`
+            SELECT user AS "User", 
+				uuid AS "ID",
+				rate AS "Rate", 
+				enabled AS "Enabled", 
+				sub_end AS "Sub end",
+                renew AS "Renew", 
+				sess_uplink AS "Sess Up", 
+				sess_downlink AS "Sess Down",
+                uplink AS "Uplink", 
+				downlink AS "Downlink", 
+				lim_ip AS "Lim", 
+				ips AS "Ips"
+            FROM clients_stats
+			ORDER BY %s %s;`, sortBy, sortOrder)
+		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
 	rows, err = memDB.Query(clientQuery)
@@ -331,7 +348,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		// Проверяем параметр mode
 		mode := r.URL.Query().Get("mode")
-		validModes := []string{"minimal", "standard", "extended"}
+		validModes := []string{"minimal", "standard", "extended", "full"}
 		if !contains(validModes, mode) {
 			if mode != "" {
 				http.Error(w, fmt.Sprintf("Invalid mode parameter: %s, must be one of %v", mode, validModes), http.StatusBadRequest)
@@ -342,7 +359,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		// Проверяем параметр sort_by
 		sortBy := r.URL.Query().Get("sort_by")
-		validSortColumns := []string{"user", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
+		validSortColumns := []string{"user", "uuid", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
 		if !contains(validSortColumns, sortBy) {
 			if sortBy != "" {
 				http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)

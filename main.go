@@ -454,29 +454,66 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 	}()
 }
 
+// TokenAuthMiddleware проверяет токен в заголовке Authorization.
+func TokenAuthMiddleware(cfg *config.Config, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Если токен не задан в конфигурации, разрешаем доступ
+		if cfg.APIToken == "" {
+			log.Printf("Warning: API_TOKEN not set, allowing request from %s", r.RemoteAddr)
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Проверяем заголовок Authorization
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			log.Printf("Missing Authorization header for request from %s", r.RemoteAddr)
+			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		// Ожидаем формат "Bearer <token>"
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			log.Printf("Invalid Authorization header format from %s", r.RemoteAddr)
+			http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
+			return
+		}
+
+		// Проверяем токен
+		if parts[1] != cfg.APIToken {
+			log.Printf("Invalid token from %s", r.RemoteAddr)
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Токен верный, продолжаем обработку
+		next.ServeHTTP(w, r)
+	}
+}
+
 func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	server := &http.Server{
 		Addr:    "127.0.0.1:" + cfg.Port,
 		Handler: nil,
 	}
 
+	// Эндпоинты только для чтения (без токена)
 	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, dbMutex, cfg.Services, cfg.Features))
-
 	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, dbMutex))
-	http.HandleFunc("/api/v1/add_user", api.AddUserHandler(cfg))
-	http.HandleFunc("/api/v1/delete_user", api.DeleteUserHandler(cfg))
-	http.HandleFunc("/api/v1/set_enabled", api.SetEnabledHandler(memDB, dbMutex, cfg))
-
 	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, dbMutex))
-	http.HandleFunc("/api/v1/delete_dns_stats", api.DeleteDNSStatsHandler(memDB, dbMutex))
 
-	http.HandleFunc("/api/v1/reset_traffic", api.ResetTrafficHandler())
-	http.HandleFunc("/api/v1/reset_clients_stats", api.ResetClientsStatsHandler(memDB, dbMutex))
-	http.HandleFunc("/api/v1/reset_traffic_stats", api.ResetTrafficStatsHandler(memDB, dbMutex))
-
-	http.HandleFunc("/api/v1/update_lim_ip", api.UpdateIPLimitHandler(memDB, dbMutex))
-	http.HandleFunc("/api/v1/adjust_date", api.AdjustDateOffsetHandler(memDB, dbMutex, cfg))
-	http.HandleFunc("/api/v1/update_renew", api.UpdateRenewHandler(memDB, dbMutex))
+	// Эндпоинты, изменяющие данные (с проверкой токена)
+	http.HandleFunc("/api/v1/add_user", api.TokenAuthMiddleware(cfg, api.AddUserHandler(cfg)))
+	http.HandleFunc("/api/v1/delete_user", api.TokenAuthMiddleware(cfg, api.DeleteUserHandler(cfg)))
+	http.HandleFunc("/api/v1/set_enabled", api.TokenAuthMiddleware(cfg, api.SetEnabledHandler(memDB, dbMutex, cfg)))
+	http.HandleFunc("/api/v1/update_lim_ip", api.TokenAuthMiddleware(cfg, api.UpdateIPLimitHandler(memDB, dbMutex)))
+	http.HandleFunc("/api/v1/adjust_date", api.TokenAuthMiddleware(cfg, api.AdjustDateOffsetHandler(memDB, dbMutex, cfg)))
+	http.HandleFunc("/api/v1/update_renew", api.TokenAuthMiddleware(cfg, api.UpdateRenewHandler(memDB, dbMutex)))
+	http.HandleFunc("/api/v1/delete_dns_stats", api.TokenAuthMiddleware(cfg, api.DeleteDNSStatsHandler(memDB, dbMutex)))
+	http.HandleFunc("/api/v1/reset_traffic", api.TokenAuthMiddleware(cfg, api.ResetTrafficHandler()))
+	http.HandleFunc("/api/v1/reset_clients_stats", api.TokenAuthMiddleware(cfg, api.ResetClientsStatsHandler(memDB, dbMutex)))
+	http.HandleFunc("/api/v1/reset_traffic_stats", api.TokenAuthMiddleware(cfg, api.ResetTrafficStatsHandler(memDB, dbMutex)))
 
 	go func() {
 		// log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)

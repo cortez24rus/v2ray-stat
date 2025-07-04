@@ -32,6 +32,7 @@ type Config struct {
 	MemoryThreshold       int
 	Features              map[string]bool
 	MonitorTickerInterval int
+	APIToken              string
 }
 
 // defaultConfig provides default configuration values.
@@ -55,6 +56,7 @@ var defaultConfig = Config{
 	MemoryThreshold:       0,
 	Features:              make(map[string]bool),
 	MonitorTickerInterval: 10,
+	APIToken:              "",
 }
 
 // LoadConfig reads configuration from the specified file and returns a Config struct.
@@ -191,6 +193,10 @@ func LoadConfig(configFile string) (Config, error) {
 				log.Printf("Invalid MONITOR_TICKER_INTERVAL value '%s', using default %d seconds", value, cfg.MonitorTickerInterval)
 			} else {
 				cfg.MonitorTickerInterval = interval
+			}
+		case "API_TOKEN":
+			if value != "" {
+				cfg.APIToken = value
 			}
 		default:
 			log.Printf("Warning: unknown configuration key: %s", key)

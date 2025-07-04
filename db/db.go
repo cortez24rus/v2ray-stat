@@ -636,9 +636,9 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					clientMap := make(map[string]bool)
 					newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients)+1)
 					for _, c := range inbound.Settings.Clients {
-						if !clientMap[client.Email] {
+						if !clientMap[c.Email] {
 							newClients = append(newClients, c)
-							clientMap[client.Email] = true
+							clientMap[c.Email] = true
 						}
 					}
 					if !clientMap[userIdentifier] {
