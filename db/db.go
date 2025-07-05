@@ -941,6 +941,7 @@ func InitDB(db *sql.DB, dbType string) error {
         CREATE TABLE IF NOT EXISTS clients_stats (
             user TEXT PRIMARY KEY,
             uuid TEXT,
+            last_seen TEXT DEFAULT '',
             rate INTEGER DEFAULT 0,
             enabled TEXT,
             created TEXT,
@@ -951,8 +952,7 @@ func InitDB(db *sql.DB, dbType string) error {
             uplink INTEGER DEFAULT 0,
             downlink INTEGER DEFAULT 0,
             sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0,
-            last_seen TEXT DEFAULT ''
+            sess_downlink INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS traffic_stats (
             source TEXT PRIMARY KEY,

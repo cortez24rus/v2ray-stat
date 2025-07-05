@@ -369,7 +369,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		// Проверяем параметр sort_by
 		sortBy := r.URL.Query().Get("sort_by")
-		validSortColumns := []string{"user", "uuid", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
+		validSortColumns := []string{"user", "last_seen", "uuid", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
 		if !contains(validSortColumns, sortBy) {
 			if sortBy != "" {
 				http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)
