@@ -632,7 +632,7 @@ func main() {
 		stats.MonitorNetwork(ctx, &cfg, &wg)
 	}
 
-	if cfg.Features["report"] {
+	if cfg.Features["telegram"] {
 		stats.MonitorDailyReport(ctx, memDB, &cfg, &wg)
 		stats.MonitorStats(ctx, &cfg, &wg)
 	}
