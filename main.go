@@ -275,7 +275,9 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 
 		lastSeen := ""
 
-		if rate > 0 {
+		fmt.Printf("User: %s, rate: %d, online: %d\n", user, rate, cfg.OnlineRateThreshold*1000)
+		if rate > cfg.OnlineRateThreshold*1000 {
+			fmt.Printf("online\n")
 			lastSeen = "online"
 			lastTrafficTime[user] = currentTime
 			isInactive[user] = false

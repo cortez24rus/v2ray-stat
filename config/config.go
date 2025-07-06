@@ -34,6 +34,7 @@ type Config struct {
 	Features              map[string]bool
 	MonitorTickerInterval int
 	APIToken              string
+	OnlineRateThreshold   int
 }
 
 // defaultConfig provides default configuration values.
@@ -59,6 +60,7 @@ var defaultConfig = Config{
 	Features:              make(map[string]bool),
 	MonitorTickerInterval: 10,
 	APIToken:              "",
+	OnlineRateThreshold:   0,
 }
 
 // LoadConfig reads configuration from the specified file and returns a Config struct.
@@ -202,12 +204,18 @@ func LoadConfig(configFile string) (Config, error) {
 			}
 		case "TIMEZONE":
 			if value != "" {
-				// Проверяем, является ли таймзона валидной
 				if _, err := time.LoadLocation(value); err != nil {
 					log.Printf("Invalid TIMEZONE value '%s', using default (empty)", value)
 				} else {
 					cfg.Timezone = value
 				}
+			}
+		case "ONLINE_RATE_THRESHOLD":
+			threshold, err := strconv.Atoi(value)
+			if err != nil || threshold <= 0 {
+				log.Printf("Invalid ONLINE_RATE_THRESHOLD value '%s', using default %d", value, cfg.OnlineRateThreshold)
+			} else {
+				cfg.OnlineRateThreshold = threshold
 			}
 		default:
 			log.Printf("Warning: unknown configuration key: %s", key)
