@@ -136,3 +136,15 @@ curl -X PATCH http://127.0.0.1:9952/api/v1/update_renew -d "user=newuser&renew=3
 }
 ```
 
+- Xray
+```json
+  "api": {
+    "tag": "api",
+    "listen": "127.0.0.1:9953",
+    "services": [
+      "HandlerService",
+      "StatsService",
+      "ReflectionService"
+    ]
+  },
+```

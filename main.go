@@ -32,6 +32,10 @@ var (
 	previousStats       string
 	clientPreviousStats string
 
+	// Хранит время последнего ненулевого трафика для каждого пользователя
+	lastTrafficTime      = make(map[string]time.Time)
+	lastTrafficTimeMutex sync.Mutex
+
 	// Хранит статус неактивности пользователя
 	isInactive      = make(map[string]bool)
 	isInactiveMutex sync.Mutex
@@ -246,6 +250,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	currentTime := time.Now().In(timeLocation)
 	var queries string
 
+	lastTrafficTimeMutex.Lock()
 	isInactiveMutex.Lock()
 
 	for user := range clientUplinkValues {
@@ -269,13 +274,17 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
 
 		lastSeen := ""
+
 		if rate > cfg.OnlineRateThreshold*1000 {
 			lastSeen = "online"
+			lastTrafficTime[user] = currentTime
 			isInactive[user] = false
 		} else {
-			if !isInactive[user] {
-				lastSeen = currentTime.Truncate(time.Minute).Format("2006-01-02 15:04")
-				isInactive[user] = true
+			if lastTime, exists := lastTrafficTime[user]; exists {
+				if time.Since(lastTime) >= 20*time.Second && !isInactive[user] {
+					lastSeen = currentTime.Truncate(time.Minute).Format("2006-01-02 15:04")
+					isInactive[user] = true
+				}
 			}
 		}
 
@@ -292,6 +301,7 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		}
 	}
 
+	lastTrafficTimeMutex.Unlock()
 	isInactiveMutex.Unlock()
 
 	if queries != "" {
