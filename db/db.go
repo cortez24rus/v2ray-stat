@@ -860,6 +860,38 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 	return false
 }
 
+// LoadIsInactiveFromLastSeen загружает статус неактивности пользователей из колонки last_seen
+func LoadIsInactiveFromLastSeen(db *sql.DB, dbMutex *sync.Mutex) (map[string]bool, error) {
+    dbMutex.Lock()
+    defer dbMutex.Unlock()
+
+    rows, err := db.Query("SELECT user, last_seen FROM clients_stats")
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+	isInactive := make(map[string]bool)
+	for rows.Next() {
+		var user, lastSeen string
+		if err := rows.Scan(&user, &lastSeen); err != nil {
+			log.Printf("Ошибка сканирования строки для пользователя %s: %v", user, err)
+			continue
+		}
+        if lastSeen == "online" {
+            isInactive[user] = false
+        } else {
+            isInactive[user] = true
+        }
+    }
+	// Проверяем ошибки после перебора строк
+    if err := rows.Err(); err != nil {
+        return nil, err
+    }
+
+    return isInactive, nil
+}
+
 // SyncDB копирует данные из исходной базы (srcDB) в целевую базу (destDB) с использованием SQLite Backup API
 func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error {
 	start := time.Now()
