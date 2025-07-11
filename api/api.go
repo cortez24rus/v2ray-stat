@@ -322,21 +322,22 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "full":
 		clientQuery = fmt.Sprintf(`
-            SELECT user AS "User", 
-                   uuid AS "ID",
-                   last_seen AS "Last seen",
-                   rate AS "Rate",
-                   sess_uplink AS "Sess Up", 
-                   sess_downlink AS "Sess Down",
-                   uplink AS "Uplink", 
-                   downlink AS "Downlink", 
-                   enabled AS "Enabled", 
-                   sub_end AS "Sub end",
-                   renew AS "Renew", 
-                   lim_ip AS "Lim", 
-                   ips AS "Ips"
-            FROM clients_stats
-            ORDER BY %s %s;`, sortBy, sortOrder)
+			SELECT user AS "User", 
+				   uuid AS "ID",
+				   last_seen AS "Last seen",
+				   rate AS "Rate",
+				   sess_uplink AS "Sess Up", 
+				   sess_downlink AS "Sess Down",
+				   uplink AS "Uplink", 
+				   downlink AS "Downlink", 
+				   enabled AS "Enabled", 
+				   sub_end AS "Sub end",
+				   renew AS "Renew", 
+				   lim_ip AS "Lim", 
+				   ips AS "Ips",
+				   created AS "Created"
+		    FROM clients_stats
+		    ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
@@ -373,7 +374,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		// Проверяем параметр sort_by
 		sortBy := r.URL.Query().Get("sort_by")
-		validSortColumns := []string{"user", "last_seen", "uuid", "rate", "enabled", "sub_end", "renew", "sess_uplink", "sess_downlink", "uplink", "downlink", "lim_ip"}
+		validSortColumns := []string{"user", "uuid", "last_seen", "rate", "sess_uplink", "sess_downlink", "uplink", "downlink", "enabled", "sub_end", "renew", "lim_ip", "ips", "created"}
 		if !contains(validSortColumns, sortBy) {
 			if sortBy != "" {
 				http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)
