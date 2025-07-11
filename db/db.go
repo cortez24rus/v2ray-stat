@@ -985,8 +985,8 @@ func InitDB(db *sql.DB, dbType string) error {
             uplink INTEGER DEFAULT 0,
             downlink INTEGER DEFAULT 0,
             sess_uplink INTEGER DEFAULT 0,
-            sess_downlink INTEGER DEFAULT 0
-            created TEXT,
+            sess_downlink INTEGER DEFAULT 0,
+            created TEXT
         );
 
 		-- Create traffic_stats table
