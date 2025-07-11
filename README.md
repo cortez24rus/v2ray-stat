@@ -21,17 +21,17 @@ curl -X GET http://127.0.0.1:9952/api/v1/users
 - **Параметры**:
   - `mode` (optional): Задаёт режим вывода статистики. Возможные значения:
     - `minimal` (default):
-      - Для `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
-      - Для `clients_stats`: `User`, `Last seen`, `Rate`, `Uplink`, `Downlink`
+      - `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
+      - `clients_stats`: `User`, `Last seen`, `Rate`, `Uplink`, `Downlink`
     - `standard`:
-      - Для `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
-      - Для `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`
+      - `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
+      - `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`
     - `extended`:
-      - Для `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
-      - Для `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`
+      - `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
+      - `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`
     - `full`:
-      - Для `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
-      - Для `clients_stats`: `User`, `ID`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`, `Created`
+      - `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
+      - `clients_stats`: `User`, `ID`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`, `Created`
   - `sort_by` (optional): `user`, `rate`, `enabled`, `sub_end`, `renew`, `sess_uplink`, `sess_downlink`, `uplink`, `downlink`, `lim_ip` (default: `user`)
   - `sort_order` (optional): `ASC` | `DESC` (default: `ASC`)
 
