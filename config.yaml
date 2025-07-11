@@ -1,0 +1,60 @@
+# v2ray-stat Configuration File
+# This file specifies paths and settings for the v2ray-stat monitoring application.
+
+# Core Settings
+core:
+  dir: /usr/local/etc/xray/                                                     # Directory path where the proxy (Xray or Singbox) config files are stored. Must end with a slash (/).
+  config: /usr/local/etc/xray/config.json                                       # Path to the main configuration file for the proxy core (e.g., Xray or Singbox config).
+  access_log: /usr/local/etc/xray/access.log                                    # Path to the proxy core's access log file for tracking user sessions and IPs.
+  access_log_regex: 'from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)'  # Regular expression to parse access log. Should extract source IP, destination host, and user email/remark.
+  # access_log_regex: 'login: (\S+); ip: ([0-9\.]+)'                              # Alternative regex (e.g., for custom login formats):
+
+# v2ray-stat Settings
+v2ray-stat:
+  type: xray                             # Type of proxy core used for statistics. Accepted values: xray, singbox.
+  port: 9952                             # TCP port for v2ray-stat API server. Must be between 1 and 65535.
+  monitor:
+    ticker_interval: 10                  # Interval (in seconds) for polling monitored services and users. Recommended: 5–60.
+    online_rate_threshold: 0             # Minimum rate threshold in kilobits per second (kbps) to consider a user online. 0 means any non-zero rate is considered online.
+
+# API Settings
+api:
+  api_token: ""                          # Token required to access the API endpoints. If empty, access is allowed without authorization. Format: Bearer <token>.
+
+# Timezone Settings
+timezone: Europe/Amsterdam               # IANA timezone name (e.g., Europe/Amsterdam, Asia/Singapore). If empty, uses TZ environment variable or UTC.
+
+# Features & Monitoring Options
+features:
+  telegram: true                         # Enables Telegram notifications for periodic user reports and daily statistics.
+  network: true                          # Enables real-time network usage monitoring.
+  system_monitoring: true                # Enables system-level monitoring (memory and disk usage).
+  auth_lua: true                         # Enables dynamic updates to HAProxy's auth.lua file for credential management.
+
+# List of system services to monitor and notify on failure. Any valid system service can be specified here (e.g., xray, haproxy, nginx, or custom services).
+services:
+  - xray
+  - haproxy
+  - nginx
+  - warp-cli
+  - fail2ban-server
+
+# Telegram Notifications
+telegram:
+  chat_id: ""                            # Chat or group ID for Telegram bot notifications. Leave empty to disable.
+  bot_token: ""                          # API token for the Telegram bot. Leave empty to disable.
+
+# System Monitoring
+system_monitoring:
+  average_interval: 120                  # Interval (in seconds) for calculating average memory usage for long-term trend analysis.
+  memory:
+    threshold: 80                        # Percentage (0–100) of memory usage at which a warning is triggered. 0 disables the warning.
+  disk:
+    threshold: 80                        # Percentage (0–100) of disk usage at which a warning is triggered. 0 disables the warning.
+
+# Paths & Logging
+paths:
+  database: /usr/local/etc/v2ray-stat/data.db     # Path to the SQLite database for tracking user sessions and usage.
+  f2b_log: /var/log/v2ray-stat.log                # Path to the log file for recording v2ray-stat violations or issues (e.g., IP limit exceeded).
+  f2b_banned_log: /var/log/v2ray-stat-banned.log  # Path to the log file for recording IP bans and unbans.
+  auth_lua: /etc/haproxy/.auth.lua                # Path to HAProxy's .auth.lua file, dynamically updated if auth_lua feature is enabled.

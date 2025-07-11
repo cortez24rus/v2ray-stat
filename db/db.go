@@ -862,14 +862,14 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 
 // LoadIsInactiveFromLastSeen загружает статус неактивности пользователей из колонки last_seen
 func LoadIsInactiveFromLastSeen(db *sql.DB, dbMutex *sync.Mutex) (map[string]bool, error) {
-    dbMutex.Lock()
-    defer dbMutex.Unlock()
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
 
-    rows, err := db.Query("SELECT user, last_seen FROM clients_stats")
-    if err != nil {
-        return nil, err
-    }
-    defer rows.Close()
+	rows, err := db.Query("SELECT user, last_seen FROM clients_stats")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
 	isInactive := make(map[string]bool)
 	for rows.Next() {
@@ -878,18 +878,18 @@ func LoadIsInactiveFromLastSeen(db *sql.DB, dbMutex *sync.Mutex) (map[string]boo
 			log.Printf("Ошибка сканирования строки для пользователя %s: %v", user, err)
 			continue
 		}
-        if lastSeen == "online" {
-            isInactive[user] = false
-        } else {
-            isInactive[user] = true
-        }
-    }
+		if lastSeen == "online" {
+			isInactive[user] = false
+		} else {
+			isInactive[user] = true
+		}
+	}
 	// Проверяем ошибки после перебора строк
-    if err := rows.Err(); err != nil {
-        return nil, err
-    }
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-    return isInactive, nil
+	return isInactive, nil
 }
 
 // SyncDB копирует данные из исходной базы (srcDB) в целевую базу (destDB) с использованием SQLite Backup API
@@ -970,6 +970,8 @@ func InitDB(db *sql.DB, dbType string) error {
 	_, err = db.Exec(`
         PRAGMA cache_size = 2000;
         PRAGMA journal_mode = MEMORY;
+
+		-- Create or update clients_stats table
         CREATE TABLE IF NOT EXISTS clients_stats (
             user TEXT PRIMARY KEY,
             uuid TEXT,
@@ -986,13 +988,18 @@ func InitDB(db *sql.DB, dbType string) error {
             sess_uplink INTEGER DEFAULT 0,
             sess_downlink INTEGER DEFAULT 0
         );
+
+		-- Create traffic_stats table
         CREATE TABLE IF NOT EXISTS traffic_stats (
             source TEXT PRIMARY KEY,
+			rate INTEGER DEFAULT 0,
             uplink INTEGER DEFAULT 0,
             downlink INTEGER DEFAULT 0,
             sess_uplink INTEGER DEFAULT 0,
             sess_downlink INTEGER DEFAULT 0
         );
+
+		-- Create dns_stats table
         CREATE TABLE IF NOT EXISTS dns_stats (
             user TEXT NOT NULL,
             count INTEGER DEFAULT 1,

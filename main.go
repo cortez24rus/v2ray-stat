@@ -89,7 +89,7 @@ func splitAndCleanName(name string) []string {
 	return nil
 }
 
-func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex) {
+func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mutex, cfg *config.Config) {
 	currentStats := extractProxyTraffic(apiData)
 	if previousStats == "" {
 		previousStats = strings.Join(currentStats, "\n")
@@ -150,10 +150,31 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 		downlink := downlinkValues[source]
 		sessUplink := sessUplinkValues[source]
 		sessDownlink := sessDownlinkValues[source]
+		previousUplink, uplinkExists := previousValues[source+" uplink"]
+		previousDownlink, downlinkExists := previousValues[source+" downlink"]
 
-		queries += fmt.Sprintf("INSERT OR REPLACE INTO traffic_stats (source, uplink, downlink, sess_uplink, sess_downlink) "+
-			"VALUES ('%s', %d, %d, %d, %d) ON CONFLICT(source) DO UPDATE SET uplink = uplink + %d, "+
-			"downlink = downlink + %d, sess_uplink = %d, sess_downlink = %d;\n", source, uplink, downlink, sessUplink, sessDownlink, uplink, downlink, sessUplink, sessDownlink)
+		if !uplinkExists {
+			previousUplink = 0
+		}
+		if !downlinkExists {
+			previousDownlink = 0
+		}
+
+		uplinkOnline := max(sessUplink-previousUplink, 0)
+		downlinkOnline := max(sessDownlink-previousDownlink, 0)
+		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
+
+		queries += fmt.Sprintf(`
+			INSERT INTO traffic_stats (source, rate, uplink, downlink, sess_uplink, sess_downlink)
+			VALUES ('%s', %d, %d, %d, %d, %d)
+			ON CONFLICT(source) DO UPDATE SET
+				rate = %d,
+				uplink = uplink + %d,
+				downlink = downlink + %d,
+				sess_uplink = %d,
+				sess_downlink = %d;
+		`, source, rate, uplink, downlink, sessUplink, sessDownlink,
+			rate, uplink, downlink, sessUplink, sessDownlink)
 	}
 
 	if queries != "" {
@@ -245,7 +266,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 
 	currentTime := time.Now().In(timeLocation)
 	var queries string
-
 	isInactiveMutex.Lock()
 
 	for user := range clientUplinkValues {
@@ -253,7 +273,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		downlink := clientDownlinkValues[user]
 		sessUplink := clientSessUplinkValues[user]
 		sessDownlink := clientSessDownlinkValues[user]
-
 		previousUplink, uplinkExists := clientPreviousValues[user+" uplink"]
 		previousDownlink, downlinkExists := clientPreviousValues[user+" downlink"]
 
@@ -280,15 +299,30 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		}
 
 		if lastSeen != "" {
-			queries += fmt.Sprintf("UPDATE clients_stats SET "+
-				"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
-				"sess_uplink = %d, sess_downlink = %d, last_seen = '%s' WHERE user = '%s';\n",
-				rate, uplink, downlink, sessUplink, sessDownlink, lastSeen, user)
+			queries += fmt.Sprintf(`
+				INSERT INTO clients_stats (user, last_seen, rate, uplink, downlink, sess_uplink, sess_downlink)
+				VALUES ('%s', '%s', %d, %d, %d, %d, %d)
+				ON CONFLICT(user) DO UPDATE SET
+					last_seen = '%s',
+					rate = %d,
+					uplink = uplink + %d,
+					downlink = downlink + %d,
+					sess_uplink = %d,
+					sess_downlink = %d;
+			`, user, lastSeen, rate, uplink, downlink, sessUplink, sessDownlink,
+				lastSeen, rate, uplink, downlink, sessUplink, sessDownlink)
 		} else {
-			queries += fmt.Sprintf("UPDATE clients_stats SET "+
-				"rate = %d, uplink = uplink + %d, downlink = downlink + %d, "+
-				"sess_uplink = %d, sess_downlink = %d WHERE user = '%s';\n",
-				rate, uplink, downlink, sessUplink, sessDownlink, user)
+			queries += fmt.Sprintf(`
+				INSERT INTO clients_stats (user, rate, uplink, downlink, sess_uplink, sess_downlink)
+				VALUES ('%s', %d, %d, %d, %d, %d)
+				ON CONFLICT(user) DO UPDATE SET
+					rate = %d,
+					uplink = uplink + %d,
+					downlink = downlink + %d,
+					sess_uplink = %d,
+					sess_downlink = %d;
+			`, user, rate, uplink, downlink, sessUplink, sessDownlink,
+				rate, uplink, downlink, sessUplink, sessDownlink)
 		}
 	}
 
@@ -473,7 +507,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 				if err != nil {
 					log.Printf("Ошибка получения данных API: %v", err)
 				} else {
-					updateProxyStats(memDB, apiData, dbMutex)
+					updateProxyStats(memDB, apiData, dbMutex, cfg)
 					updateClientStats(memDB, apiData, dbMutex, cfg)
 				}
 				readNewLines(memDB, dbMutex, accessLog, &accessOffset, cfg)
@@ -496,44 +530,6 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 			}
 		}
 	}()
-}
-
-// TokenAuthMiddleware проверяет токен в заголовке Authorization.
-func TokenAuthMiddleware(cfg *config.Config, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Если токен не задан в конфигурации, разрешаем доступ
-		if cfg.APIToken == "" {
-			log.Printf("Warning: API_TOKEN not set, allowing request from %s", r.RemoteAddr)
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Проверяем заголовок Authorization
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			log.Printf("Missing Authorization header for request from %s", r.RemoteAddr)
-			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
-			return
-		}
-
-		// Ожидаем формат "Bearer <token>"
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			log.Printf("Invalid Authorization header format from %s", r.RemoteAddr)
-			http.Error(w, "Invalid Authorization header format", http.StatusUnauthorized)
-			return
-		}
-
-		// Проверяем токен
-		if parts[1] != cfg.APIToken {
-			log.Printf("Invalid token from %s", r.RemoteAddr)
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		// Токен верный, продолжаем обработку
-		next.ServeHTTP(w, r)
-	}
 }
 
 func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
@@ -598,9 +594,9 @@ func main() {
 	defer fileDB.Close()
 
 	isInactive, err = db.LoadIsInactiveFromLastSeen(memDB, &dbMutex)
-    if err != nil {
-        log.Fatalf("Ошибка загрузки начального статуса: %v", err)
-    }
+	if err != nil {
+		log.Fatalf("Ошибка загрузки начального статуса: %v", err)
+	}
 
 	// Setup context and signals
 	ctx, cancel := context.WithCancel(context.Background())

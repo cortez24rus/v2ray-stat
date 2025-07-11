@@ -240,24 +240,26 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	var serverQuery string
 	var trafficColsServer []string
 	switch mode {
-	case "minimal":
+	case "minimal", "standard":
 		serverQuery = `
-            SELECT source AS "Source", 
-				uplink AS "Uplink", 
-				downlink AS "Downlink"
+            SELECT source AS "Source",
+                   rate AS "Rate",
+                   uplink AS "Uplink",
+                   downlink AS "Downlink"
             FROM traffic_stats;
         `
-		trafficColsServer = []string{"Uplink", "Downlink"}
-	case "standard", "extended", "full":
+		trafficColsServer = []string{"Rate", "Uplink", "Downlink"}
+	case "extended", "full":
 		serverQuery = `
-            SELECT source AS "Source", 
-				sess_uplink AS "Sess Up", 
-				sess_downlink AS "Sess Down",
-				uplink AS "Uplink", 
-				downlink AS "Downlink"
+            SELECT source AS "Source",
+                   rate AS "Rate",
+                   sess_uplink AS "Sess Up",
+                   sess_downlink AS "Sess Down",
+                   uplink AS "Uplink",
+                   downlink AS "Downlink"
             FROM traffic_stats;
         `
-		trafficColsServer = []string{"Sess Up", "Sess Down", "Uplink", "Downlink"}
+		trafficColsServer = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
 	rows, err := memDB.Query(serverQuery)
@@ -277,62 +279,62 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	case "minimal":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
-				last_seen AS "Last seen",
-				rate AS "Rate", 
-				uplink AS "Uplink", 
-				downlink AS "Downlink"
+                   last_seen AS "Last seen",
+                   rate AS "Rate", 
+                   uplink AS "Uplink", 
+                   downlink AS "Downlink"
             FROM clients_stats
             ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "standard":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
-				last_seen AS "Last seen",
-				rate AS "Rate", 
-                uplink AS "Uplink", 
-				downlink AS "Downlink", 
-				enabled AS "Enabled", 
-				sub_end AS "Sub end",
-                renew AS "Renew", 
-				lim_ip AS "Lim", 
-				ips AS "Ips"
+                   last_seen AS "Last seen",
+                   rate AS "Rate", 
+                   uplink AS "Uplink", 
+                   downlink AS "Downlink", 
+                   enabled AS "Enabled", 
+                   sub_end AS "Sub end",
+                   renew AS "Renew", 
+                   lim_ip AS "Lim", 
+                   ips AS "Ips"
             FROM clients_stats
-			ORDER BY %s %s;`, sortBy, sortOrder)
-		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
+            ORDER BY %s %s;`, sortBy, sortOrder)
+		trafficColsClients = []string{"Rate", "Uplink", "Downlink"}
 	case "extended":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
-				last_seen AS "Last seen",
-				rate AS "Rate", 
-				sess_uplink AS "Sess Up", 
-				sess_downlink AS "Sess Down",
-                uplink AS "Uplink", 
-				downlink AS "Downlink", 
-				enabled AS "Enabled", 
-				sub_end AS "Sub end",
-                renew AS "Renew", 
-				lim_ip AS "Lim", 
-				ips AS "Ips"
+                   last_seen AS "Last seen",
+                   rate AS "Rate", 
+                   sess_uplink AS "Sess Up", 
+                   sess_downlink AS "Sess Down",
+                   uplink AS "Uplink", 
+                   downlink AS "Downlink", 
+                   enabled AS "Enabled", 
+                   sub_end AS "Sub end",
+                   renew AS "Renew", 
+                   lim_ip AS "Lim", 
+                   ips AS "Ips"
             FROM clients_stats
-			ORDER BY %s %s;`, sortBy, sortOrder)
+            ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	case "full":
 		clientQuery = fmt.Sprintf(`
             SELECT user AS "User", 
-				uuid AS "ID",
-				last_seen AS "Last seen",
-				rate AS "Rate",
-				sess_uplink AS "Sess Up", 
-				sess_downlink AS "Sess Down",
-                uplink AS "Uplink", 
-				downlink AS "Downlink", 
-				enabled AS "Enabled", 
-				sub_end AS "Sub end",
-                renew AS "Renew", 
-				lim_ip AS "Lim", 
-				ips AS "Ips"
+                   uuid AS "ID",
+                   last_seen AS "Last seen",
+                   rate AS "Rate",
+                   sess_uplink AS "Sess Up", 
+                   sess_downlink AS "Sess Down",
+                   uplink AS "Uplink", 
+                   downlink AS "Downlink", 
+                   enabled AS "Enabled", 
+                   sub_end AS "Sub end",
+                   renew AS "Renew", 
+                   lim_ip AS "Lim", 
+                   ips AS "Ips"
             FROM clients_stats
-			ORDER BY %s %s;`, sortBy, sortOrder)
+            ORDER BY %s %s;`, sortBy, sortOrder)
 		trafficColsClients = []string{"Rate", "Sess Up", "Sess Down", "Uplink", "Downlink"}
 	}
 
