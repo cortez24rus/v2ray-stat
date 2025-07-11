@@ -212,7 +212,7 @@ func LoadConfig(configFile string) (Config, error) {
 			}
 		case "ONLINE_RATE_THRESHOLD":
 			threshold, err := strconv.Atoi(value)
-			if err != nil || threshold <= 0 {
+			if err != nil || threshold < 0 {
 				log.Printf("Invalid ONLINE_RATE_THRESHOLD value '%s', using default %d", value, cfg.OnlineRateThreshold)
 			} else {
 				cfg.OnlineRateThreshold = threshold

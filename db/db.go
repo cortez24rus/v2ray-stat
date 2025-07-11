@@ -978,7 +978,6 @@ func InitDB(db *sql.DB, dbType string) error {
             last_seen TEXT DEFAULT '',
             rate INTEGER DEFAULT 0,
             enabled TEXT,
-            created TEXT,
             sub_end TEXT DEFAULT '',
             renew INTEGER DEFAULT 0,
             lim_ip INTEGER DEFAULT 0,
@@ -987,6 +986,7 @@ func InitDB(db *sql.DB, dbType string) error {
             downlink INTEGER DEFAULT 0,
             sess_uplink INTEGER DEFAULT 0,
             sess_downlink INTEGER DEFAULT 0
+            created TEXT,
         );
 
 		-- Create traffic_stats table

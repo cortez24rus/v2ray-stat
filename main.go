@@ -545,6 +545,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg
 
 	// Эндпоинты, изменяющие данные (с проверкой токена)
 	http.HandleFunc("/api/v1/add_user", api.TokenAuthMiddleware(cfg, api.AddUserHandler(cfg)))
+	http.HandleFunc("/api/v1/bulk_add_users", api.TokenAuthMiddleware(cfg, api.BulkAddUsersHandler(cfg)))
 	http.HandleFunc("/api/v1/delete_user", api.TokenAuthMiddleware(cfg, api.DeleteUserHandler(cfg)))
 	http.HandleFunc("/api/v1/set_enabled", api.TokenAuthMiddleware(cfg, api.SetEnabledHandler(memDB, dbMutex, cfg)))
 	http.HandleFunc("/api/v1/update_lim_ip", api.TokenAuthMiddleware(cfg, api.UpdateIPLimitHandler(memDB, dbMutex)))
@@ -581,7 +582,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
-
 	initTimezone(&cfg)
 
 	// Инициализация базы данных

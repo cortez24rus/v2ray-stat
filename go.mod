@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/sagernet/sing v0.5.1 // indirect
 	golang.org/x/net v0.40.0 // indirect

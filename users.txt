@@ -1,0 +1,4 @@
+user1,550e8400-e29b-41d4-a716-446655440000,vless-in  # Полный формат
+user2,6ba7b810-9dad-11d1-80b4-00c04fd430c8           # Без inboundTag
+user3                                                # Только имя, UUID будет сгенерирован
+user4,,vless-in                                      # Имя и inboundTag, UUID будет сгенерирован

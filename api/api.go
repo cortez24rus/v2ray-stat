@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -738,21 +740,115 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 	}
 }
 
-func saveConfig(w http.ResponseWriter, configPath string, configData any, logMessage string) error {
+func AddUserToConfig(user, credential, inboundTag string, cfg *config.Config) error {
+	start := time.Now()
+	configPath := cfg.CoreConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("error reading config.json: %v", err)
+	}
+
+	proxyType := cfg.CoreType
+	var configData any
+	var protocol string // Для хранения типа протокола
+
+	switch proxyType {
+	case "xray":
+		var cfgXray config.ConfigXray
+		if err := json.Unmarshal(data, &cfgXray); err != nil {
+			return fmt.Errorf("error parsing JSON: %v", err)
+		}
+
+		found := false
+		for i, inbound := range cfgXray.Inbounds {
+			if inbound.Tag == inboundTag {
+				protocol = inbound.Protocol
+				for _, client := range inbound.Settings.Clients {
+					if protocol == "vless" && client.ID == credential {
+						return fmt.Errorf("user with this id already exists")
+					} else if protocol == "trojan" && client.Password == credential {
+						return fmt.Errorf("user with this password already exists")
+					}
+				}
+				newClient := config.XrayClient{Email: user}
+				switch protocol {
+				case "vless":
+					newClient.ID = credential
+				case "trojan":
+					newClient.Password = credential
+				}
+				cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, newClient)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("inbound with tag %s not found", inboundTag)
+		}
+		configData = cfgXray
+
+	case "singbox":
+		var cfgSingBox config.ConfigSingbox
+		if err := json.Unmarshal(data, &cfgSingBox); err != nil {
+			return fmt.Errorf("error parsing JSON: %v", err)
+		}
+
+		found := false
+		for i, inbound := range cfgSingBox.Inbounds {
+			if inbound.Tag == inboundTag {
+				protocol = inbound.Type
+				for _, user := range inbound.Users {
+					if protocol == "vless" && user.UUID == credential {
+						return fmt.Errorf("user with this uuid already exists")
+					} else if protocol == "trojan" && user.Password == credential {
+						return fmt.Errorf("user with this password already exists")
+					}
+				}
+				newUser := config.SingboxClient{Name: user}
+				switch protocol {
+				case "vless":
+					newUser.UUID = credential
+				case "trojan":
+					newUser.Password = credential
+				}
+				cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, newUser)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("inbound with tag %s not found", inboundTag)
+		}
+		configData = cfgSingBox
+
+	default:
+		return fmt.Errorf("unsupported core type: %s", proxyType)
+	}
+
 	updateData, err := json.MarshalIndent(configData, "", "  ")
 	if err != nil {
-		log.Printf("Error marshaling JSON: %v", err)
-		http.Error(w, "Error updating configuration", http.StatusInternalServerError)
-		return err
+		return fmt.Errorf("error marshaling JSON: %v", err)
 	}
-
 	if err := os.WriteFile(configPath, updateData, 0644); err != nil {
-		log.Printf("Error writing config.json: %v", err)
-		http.Error(w, "Error saving configuration", http.StatusInternalServerError)
-		return err
+		return fmt.Errorf("error writing config.json: %v", err)
 	}
 
-	log.Print(logMessage)
+	log.Printf("User %s added to configuration with inbound %s [%v]", user, inboundTag, time.Since(start))
+
+	if cfg.Features["auth_lua"] {
+		// Для trojan хэшируем пароль, для vless передаём credential как есть
+		var credentialToAdd string
+		if protocol == "trojan" {
+			hash := sha256.Sum224([]byte(credential))
+			credentialToAdd = hex.EncodeToString(hash[:])
+		} else {
+			credentialToAdd = credential // Для vless используем UUID без хэширования
+		}
+		if err := lua.AddUserToAuthLua(cfg, user, credentialToAdd); err != nil {
+			log.Printf("Failed to add user %s to auth.lua: %v", user, err)
+		}
+	}
+
 	return nil
 }
 
@@ -784,121 +880,209 @@ func AddUserHandler(cfg *config.Config) http.HandlerFunc {
 			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
-		configPath := cfg.CoreConfig
-		data, err := os.ReadFile(configPath)
+		err := AddUserToConfig(userIdentifier, credential, inboundTag, cfg)
 		if err != nil {
-			log.Printf("Error reading config.json: %v", err)
-			http.Error(w, "Error reading configuration", http.StatusInternalServerError)
+			log.Printf("Failed to add user %s: %v [%v]", userIdentifier, err, time.Since(start))
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
-		}
-
-		proxyType := cfg.CoreType
-		var configData any
-
-		switch proxyType {
-		case "xray":
-			var cfgXray config.ConfigXray
-			if err := json.Unmarshal(data, &cfgXray); err != nil {
-				log.Printf("Error parsing JSON: %v", err)
-				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
-				return
-			}
-
-			found := false
-			for i, inbound := range cfgXray.Inbounds {
-				if inbound.Tag == inboundTag {
-					protocol := inbound.Protocol
-					for _, client := range inbound.Settings.Clients {
-						if protocol == "vless" && client.ID == credential {
-							http.Error(w, `{"error": "User with this id already exists"}`, http.StatusBadRequest)
-							return
-						} else if protocol == "trojan" && client.Password == credential {
-							http.Error(w, `{"error": "User with this password already exists"}`, http.StatusBadRequest)
-							return
-						}
-					}
-					newClient := config.XrayClient{Email: userIdentifier}
-					switch protocol {
-					case "vless":
-						newClient.ID = credential
-					case "trojan":
-						newClient.Password = credential
-					}
-
-					cfgXray.Inbounds[i].Settings.Clients = append(cfgXray.Inbounds[i].Settings.Clients, newClient)
-					found = true
-					break
-				}
-			}
-			if !found {
-				http.Error(w, fmt.Sprintf(`{"error": "Inbound with tag %s not found"}`, inboundTag), http.StatusNotFound)
-				return
-			}
-			configData = cfgXray
-
-		case "singbox":
-			var cfgSingBox config.ConfigSingbox
-			if err := json.Unmarshal(data, &cfgSingBox); err != nil {
-				log.Printf("Error parsing JSON: %v", err)
-				http.Error(w, "Error parsing configuration", http.StatusInternalServerError)
-				return
-			}
-
-			found := false
-			for i, inbound := range cfgSingBox.Inbounds {
-				protocol := inbound.Type
-				if inbound.Tag == inboundTag {
-					for _, user := range inbound.Users {
-						if protocol == "vless" && user.UUID == credential {
-							http.Error(w, `{"error": "User with this uuid already exists"}`, http.StatusBadRequest)
-							return
-						} else if protocol == "trojan" && user.Password == credential {
-							http.Error(w, `{"error": "User with this password already exists"}`, http.StatusBadRequest)
-							return
-						}
-					}
-					newUser := config.SingboxClient{Name: userIdentifier}
-					switch protocol {
-					case "vless":
-						newUser.UUID = credential
-					case "trojan":
-						newUser.Password = credential
-					}
-
-					cfgSingBox.Inbounds[i].Users = append(cfgSingBox.Inbounds[i].Users, newUser)
-					found = true
-					break
-				}
-			}
-			if !found {
-				http.Error(w, fmt.Sprintf(`{"error": "Inbound with tag %s not found"}`, inboundTag), http.StatusNotFound)
-				return
-			}
-			configData = cfgSingBox
-		}
-
-		if err := saveConfig(w, configPath, configData, fmt.Sprintf("User %s added to configuration with inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
-			log.Printf("Failed to add user %s: error saving configuration: %v [%v]", userIdentifier, err, time.Since(start))
-			return
-		}
-
-		if cfg.Features["auth_lua"] {
-			if err := lua.AddUserToAuthLua(cfg, userIdentifier, credential); err != nil {
-				log.Printf("Failed to add user %s to auth.lua: %v", userIdentifier, err)
-			}
 		}
 
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
+func saveConfig(w http.ResponseWriter, configPath string, configData any, logMessage string) error {
+	updateData, err := json.MarshalIndent(configData, "", "  ")
+	if err != nil {
+		log.Printf("Error marshaling JSON: %v", err)
+		http.Error(w, "Error updating configuration", http.StatusInternalServerError)
+		return err
+	}
+
+	if err := os.WriteFile(configPath, updateData, 0644); err != nil {
+		log.Printf("Error writing config.json: %v", err)
+		http.Error(w, "Error saving configuration", http.StatusInternalServerError)
+		return err
+	}
+
+	log.Print(logMessage)
+	return nil
+}
+
+func DeleteUserFromConfig(userIdentifier, inboundTag string, cfg *config.Config) error {
+	start := time.Now()
+	configPath := cfg.CoreConfig
+	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+	proxyType := cfg.CoreType
+
+	var userRemoved bool
+
+	switch proxyType {
+	case "xray":
+		// Read main config
+		mainConfigData, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("error reading config.json: %v", err)
+		}
+		var mainConfig config.ConfigXray
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing JSON for config.json: %v", err)
+		}
+
+		// Read disabled users config
+		var disabledConfig config.DisabledUsersConfigXray
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err == nil && len(disabledConfigData) > 0 {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing JSON for .disabled_users: %v", err)
+			}
+		} else {
+			disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
+		}
+
+		// Function to remove user from inbounds (Xray)
+		removeXrayUser := func(inbounds []config.XrayInbound) ([]config.XrayInbound, bool) {
+			for i, inbound := range inbounds {
+				if inbound.Tag == inboundTag {
+					updatedClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
+					for _, client := range inbound.Settings.Clients {
+						if client.Email != userIdentifier {
+							updatedClients = append(updatedClients, client)
+						}
+					}
+					if len(updatedClients) < len(inbound.Settings.Clients) {
+						inbounds[i].Settings.Clients = updatedClients
+						return inbounds, true
+					}
+				}
+			}
+			return inbounds, false
+		}
+
+		// Check and remove from config.json
+		mainUpdated, removedFromMain := removeXrayUser(mainConfig.Inbounds)
+		if removedFromMain {
+			mainConfig.Inbounds = mainUpdated
+			if err := saveConfig(nil, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+				return err
+			}
+			userRemoved = true
+		}
+
+		// Check and remove from .disabled_users
+		disabledUpdated, removedFromDisabled := removeXrayUser(disabledConfig.Inbounds)
+		if removedFromDisabled {
+			disabledConfig.Inbounds = disabledUpdated
+			if len(disabledConfig.Inbounds) > 0 {
+				if err := saveConfig(nil, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+					return err
+				}
+			} else {
+				if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("error removing empty .disabled_users: %v", err)
+				}
+				log.Printf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))
+			}
+			userRemoved = true
+		}
+
+	case "singbox":
+		// Read main config Singbox
+		mainConfigData, err := os.ReadFile(configPath)
+		if err != nil {
+			return fmt.Errorf("error reading config.json: %v", err)
+		}
+		var mainConfig config.ConfigSingbox
+		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
+			return fmt.Errorf("error parsing JSON for config.json: %v", err)
+		}
+
+		// Read disabled users config Singbox
+		var disabledConfig config.DisabledUsersConfigSingbox
+		disabledConfigData, err := os.ReadFile(disabledUsersPath)
+		if err == nil && len(disabledConfigData) > 0 {
+			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
+				return fmt.Errorf("error parsing JSON for .disabled_users: %v", err)
+			}
+		} else {
+			disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
+		}
+
+		// Function to remove user from inbounds (Singbox)
+		removeSingboxUser := func(inbounds []config.SingboxInbound) ([]config.SingboxInbound, bool) {
+			for i, inbound := range inbounds {
+				if inbound.Tag == inboundTag {
+					updatedUsers := make([]config.SingboxClient, 0, len(inbound.Users))
+					for _, user := range inbound.Users {
+						if user.Name != userIdentifier {
+							updatedUsers = append(updatedUsers, user)
+						}
+					}
+					if len(updatedUsers) < len(inbound.Users) {
+						inbounds[i].Users = updatedUsers
+						return inbounds, true
+					}
+				}
+			}
+			return inbounds, false
+		}
+
+		// Check and remove from config.json
+		mainUpdated, removedFromMain := removeSingboxUser(mainConfig.Inbounds)
+		if removedFromMain {
+			mainConfig.Inbounds = mainUpdated
+			if err := saveConfig(nil, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+				return err
+			}
+			userRemoved = true
+		}
+
+		// Check and remove from .disabled_users
+		disabledUpdated, removedFromDisabled := removeSingboxUser(disabledConfig.Inbounds)
+		if removedFromDisabled {
+			disabledConfig.Inbounds = disabledUpdated
+			if len(disabledConfig.Inbounds) > 0 {
+				if err := saveConfig(nil, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
+					return err
+				}
+			} else {
+				if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("error removing empty .disabled_users: %v", err)
+				}
+				log.Printf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))
+			}
+			userRemoved = true
+		}
+	}
+
+	// Handle auth.lua update if user was removed
+	if userRemoved && cfg.Features["auth_lua"] {
+		if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
+			log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
+		} else {
+			log.Printf("User %s successfully removed from auth.lua [%v]", userIdentifier, time.Since(start))
+		}
+	}
+
+	// If user not found
+	if !userRemoved {
+		return fmt.Errorf("user %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag)
+	}
+
+	return nil
+}
+
 func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 		if r.Method != http.MethodDelete {
 			http.Error(w, "Invalid method. Use DELETE", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Error parsing form data", http.StatusBadRequest)
 			return
 		}
 
@@ -914,195 +1098,11 @@ func DeleteUserHandler(cfg *config.Config) http.HandlerFunc {
 			log.Printf("inboundTag parameter not specified, using default value: %s", inboundTag)
 		}
 
-		configPath := cfg.CoreConfig
-		disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
-
-		proxyType := cfg.CoreType
-
-		switch proxyType {
-		case "xray":
-			// Read main config
-			mainConfigData, err := os.ReadFile(configPath)
-			if err != nil {
-				log.Printf("Error reading config.json: %v", err)
-				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
-				return
-			}
-			var mainConfig config.ConfigXray
-			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-				log.Printf("Error parsing JSON for config.json: %v", err)
-				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
-				return
-			}
-
-			// Read disabled users config
-			var disabledConfig config.DisabledUsersConfigXray
-			disabledConfigData, err := os.ReadFile(disabledUsersPath)
-			if err == nil && len(disabledConfigData) > 0 {
-				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Error parsing JSON for .disabled_users: %v", err)
-					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
-			}
-
-			// Function to remove user from inbounds (Xray)
-			removeXrayUser := func(inbounds []config.XrayInbound) ([]config.XrayInbound, bool) {
-				for i, inbound := range inbounds {
-					if inbound.Tag == inboundTag {
-						updatedClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
-						for _, client := range inbound.Settings.Clients {
-							if client.Email != userIdentifier {
-								updatedClients = append(updatedClients, client)
-							}
-						}
-						if len(updatedClients) < len(inbound.Settings.Clients) {
-							inbounds[i].Settings.Clients = updatedClients
-							return inbounds, true
-						}
-					}
-				}
-				return inbounds, false
-			}
-
-			// Check and remove from config.json
-			mainUpdated, removedFromMain := removeXrayUser(mainConfig.Inbounds)
-			if removedFromMain {
-				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
-					return
-				}
-
-				if cfg.Features["auth_lua"] {
-					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
-						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
-					} else {
-						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
-					}
-				}
-				return
-			}
-
-			// Check and remove from .disabled_users
-			disabledUpdated, removedFromDisabled := removeXrayUser(disabledConfig.Inbounds)
-			if removedFromDisabled {
-				disabledConfig.Inbounds = disabledUpdated
-				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
-						return
-					}
-				} else {
-					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Error removing empty .disabled_users: %v", err)
-					}
-				}
-
-				if cfg.Features["auth_lua"] {
-					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
-						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
-					} else {
-						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
-					}
-				}
-				return
-			}
-
-			// If user not found
-			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
-
-		case "singbox":
-			// Read main config Singbox
-			mainConfigData, err := os.ReadFile(configPath)
-			if err != nil {
-				log.Printf("Error reading config.json: %v", err)
-				http.Error(w, "Failed to read configuration", http.StatusInternalServerError)
-				return
-			}
-			var mainConfig config.ConfigSingbox
-			if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-				log.Printf("Error parsing JSON for config.json: %v", err)
-				http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
-				return
-			}
-
-			// Read disabled users config Singbox
-			var disabledConfig config.DisabledUsersConfigSingbox
-			disabledConfigData, err := os.ReadFile(disabledUsersPath)
-			if err == nil && len(disabledConfigData) > 0 {
-				if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-					log.Printf("Error parsing JSON for .disabled_users: %v", err)
-					http.Error(w, "Failed to parse configuration", http.StatusInternalServerError)
-					return
-				}
-			} else {
-				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
-			}
-
-			// Function to remove user from inbounds (Singbox)
-			removeSingboxUser := func(inbounds []config.SingboxInbound) ([]config.SingboxInbound, bool) {
-				for i, inbound := range inbounds {
-					if inbound.Tag == inboundTag {
-						updatedUsers := make([]config.SingboxClient, 0, len(inbound.Users))
-						for _, user := range inbound.Users {
-							if user.Name != userIdentifier {
-								updatedUsers = append(updatedUsers, user)
-							}
-						}
-						if len(updatedUsers) < len(inbound.Users) {
-							inbounds[i].Users = updatedUsers
-							return inbounds, true
-						}
-					}
-				}
-				return inbounds, false
-			}
-
-			// Check and remove from config.json
-			mainUpdated, removedFromMain := removeSingboxUser(mainConfig.Inbounds)
-			if removedFromMain {
-				mainConfig.Inbounds = mainUpdated
-				if err := saveConfig(w, configPath, mainConfig, fmt.Sprintf("User %s successfully removed from config.json, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
-					return
-				}
-
-				if cfg.Features["auth_lua"] {
-					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
-						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
-					} else {
-						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
-					}
-				}
-				return
-			}
-
-			// Check and remove from .disabled_users
-			disabledUpdated, removedFromDisabled := removeSingboxUser(disabledConfig.Inbounds)
-			if removedFromDisabled {
-				disabledConfig.Inbounds = disabledUpdated
-				if len(disabledConfig.Inbounds) > 0 {
-					if err := saveConfig(w, disabledUsersPath, disabledConfig, fmt.Sprintf("User %s successfully removed from .disabled_users, inbound %s [%v]", userIdentifier, inboundTag, time.Since(start))); err != nil {
-						return
-					}
-				} else {
-					if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-						log.Printf("Error removing empty .disabled_users: %v", err)
-					}
-				}
-
-				if cfg.Features["auth_lua"] {
-					if err := lua.DeleteUserFromAuthLua(cfg, userIdentifier); err != nil {
-						log.Printf("Failed to delete user %s from auth.lua: %v", userIdentifier, err)
-					} else {
-						log.Printf("User %s successfully removed from auth.lua", userIdentifier)
-					}
-				}
-				return
-			}
-
-			// If user not found
-			http.Error(w, fmt.Sprintf("User %s not found in inbound %s in either config.json or .disabled_users", userIdentifier, inboundTag), http.StatusNotFound)
+		err := DeleteUserFromConfig(userIdentifier, inboundTag, cfg)
+		if err != nil {
+			log.Printf("Failed to delete user %s: %v", userIdentifier, err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 }
