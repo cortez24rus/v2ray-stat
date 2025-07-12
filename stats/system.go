@@ -79,31 +79,31 @@ func getConnectionCounts() (tcpCount, udpCount int) {
 
 func getCoreVersion(cfg *config.Config) string {
 	var binaryName string
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		binaryName = "xray"
 	case "singbox":
 		binaryName = "sing-box"
 	}
 
-	binaryPath := filepath.Join(cfg.CoreDir, binaryName)
+	binaryPath := filepath.Join(cfg.Core.Dir, binaryName)
 	cmd := exec.Command(binaryPath, "version")
 	output, err := cmd.Output()
 	if err != nil {
-		log.Printf("Error retrieving %s version: %v", cfg.CoreType, err)
+		log.Printf("Error retrieving %s version: %v", cfg.V2rayStat.Type, err)
 		return "unknown"
 	}
 
 	lines := strings.Split(string(output), "\n")
 	if len(lines) > 0 {
 		parts := strings.Fields(lines[0])
-		if cfg.CoreType == "xray" && len(parts) >= 2 {
+		if cfg.V2rayStat.Type == "xray" && len(parts) >= 2 {
 			return parts[1] // Xray version is the second field (e.g., 25.3.6)
-		} else if cfg.CoreType == "singbox" && len(parts) >= 3 {
+		} else if cfg.V2rayStat.Type == "singbox" && len(parts) >= 3 {
 			return parts[2] // Singbox version is the third field (e.g., 1.11.13)
 		}
 	}
-	log.Printf("Error: invalid version output for %s", cfg.CoreType)
+	log.Printf("Error: invalid version output for %s", cfg.V2rayStat.Type)
 	return "unknown"
 }
 
@@ -448,9 +448,9 @@ func MonitorStats(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 		for {
 			select {
 			case <-ticker.C:
-				CheckServiceStatus(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.Services)
-				CheckDiskUsage(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.DiskThreshold, cfg.MemoryAverageInterval)
-				CheckMemoryUsage(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.MemoryThreshold, cfg.MemoryAverageInterval)
+				CheckServiceStatus(cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.Services)
+				CheckDiskUsage(cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.SystemMonitoring.Disk.Threshold, cfg.SystemMonitoring.AverageInterval)
+				CheckMemoryUsage(cfg.Telegram.BotToken, cfg.Telegram.ChatID, cfg.SystemMonitoring.Memory.Threshold, cfg.SystemMonitoring.AverageInterval)
 			case <-ctx.Done():
 				return
 			}

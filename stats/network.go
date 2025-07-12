@@ -182,7 +182,7 @@ func MonitorNetwork(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.V2rayStat.Monitor.TickerInterval) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {

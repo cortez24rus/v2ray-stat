@@ -54,8 +54,8 @@ func MonitorBanned(bannedLog *os.File, bannedOffset *int64, cfg *config.Config) 
 				" Time:   *%s*", user, ip, timestamp)
 		}
 
-		if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {
-			if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err != nil {
+		if cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != "" {
+			if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err != nil {
 				log.Printf("Error sending ban notification: %v", err)
 			}
 		}
@@ -82,9 +82,9 @@ func MonitorBannedLog(ctx context.Context, cfg *config.Config, wg *sync.WaitGrou
 	go func() {
 		defer wg.Done()
 
-		bannedLog, err := os.OpenFile(cfg.BannedLogFile, os.O_RDONLY|os.O_CREATE, 0644)
+		bannedLog, err := os.OpenFile(cfg.Paths.F2BBannedLog, os.O_RDONLY|os.O_CREATE, 0644)
 		if err != nil {
-			log.Printf("Ошибка открытия файла логов %s: %v", cfg.BannedLogFile, err)
+			log.Printf("Ошибка открытия файла логов %s: %v", cfg.Paths.F2BBannedLog, err)
 			return
 		}
 		defer bannedLog.Close()

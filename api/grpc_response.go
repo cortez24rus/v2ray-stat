@@ -26,7 +26,7 @@ func GetApiResponse(cfg *config.Config) (*ApiResponse, error) {
 
 	var stats []Stat
 
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		client := statsXray.NewStatsServiceClient(clientConn)
 		req := &statsXray.QueryStatsRequest{

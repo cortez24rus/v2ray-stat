@@ -162,7 +162,7 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 
 		uplinkOnline := max(sessUplink-previousUplink, 0)
 		downlinkOnline := max(sessDownlink-previousDownlink, 0)
-		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
+		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.V2rayStat.Monitor.TickerInterval
 
 		queries += fmt.Sprintf(`
 			INSERT INTO traffic_stats (source, rate, uplink, downlink, sess_uplink, sess_downlink)
@@ -285,10 +285,10 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 
 		uplinkOnline := max(sessUplink-previousUplink, 0)
 		downlinkOnline := max(sessDownlink-previousDownlink, 0)
-		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.MonitorTickerInterval
+		rate := (uplinkOnline + downlinkOnline) * 8 / cfg.V2rayStat.Monitor.TickerInterval
 
 		lastSeen := ""
-		if rate > cfg.OnlineRateThreshold*1000 {
+		if rate > cfg.V2rayStat.Monitor.OnlineRateThreshold*1000 {
 			lastSeen = "online"
 			isInactive[user] = false
 		} else {
@@ -366,7 +366,7 @@ func upsertDNSRecordsBatch(tx *sql.Tx, dnsStats map[string]map[string]int) error
 }
 
 func processLogLine(line string, dnsStats map[string]map[string]int, cfg *config.Config) (string, []string, bool) {
-	matches := regexp.MustCompile(cfg.AccessLogRegex).FindStringSubmatch(line)
+	matches := regexp.MustCompile(cfg.Core.AccessLogRegex).FindStringSubmatch(line)
 	if len(matches) != 3 && len(matches) != 4 {
 		return "", nil, false
 	}
@@ -472,9 +472,9 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 	go func() {
 		defer wg.Done()
 
-		accessLog, err := os.OpenFile(cfg.AccessLogPath, os.O_RDONLY|os.O_CREATE, 0644)
+		accessLog, err := os.OpenFile(cfg.Core.AccessLog, os.O_RDONLY|os.O_CREATE, 0644)
 		if err != nil {
-			log.Printf("Ошибка открытия файла логов %s: %v", cfg.AccessLogPath, err)
+			log.Printf("Ошибка открытия файла логов %s: %v", cfg.Core.AccessLog, err)
 			return
 		}
 		defer accessLog.Close()
@@ -487,7 +487,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 			return
 		}
 
-		ticker := time.NewTicker(time.Duration(cfg.MonitorTickerInterval) * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.V2rayStat.Monitor.TickerInterval) * time.Second)
 		defer ticker.Stop()
 
 		dailyTicker := time.NewTicker(24 * time.Hour)
@@ -514,16 +514,16 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 
 			case <-dailyTicker.C:
 				if err := accessLog.Close(); err != nil {
-					log.Printf("Ошибка при закрытии файла логов %s: %v", cfg.AccessLogPath, err)
+					log.Printf("Ошибка при закрытии файла логов %s: %v", cfg.Core.AccessLog, err)
 				}
-				accessLog, err = os.OpenFile(cfg.AccessLogPath, os.O_RDONLY|os.O_CREATE|os.O_TRUNC, 0644)
+				accessLog, err = os.OpenFile(cfg.Core.AccessLog, os.O_RDONLY|os.O_CREATE|os.O_TRUNC, 0644)
 				if err != nil {
-					log.Printf("Ошибка при открытии файла логов %s после очистки: %v", cfg.AccessLogPath, err)
+					log.Printf("Ошибка при открытии файла логов %s после очистки: %v", cfg.Core.AccessLog, err)
 					return
 				}
 
 				accessOffset = 0
-				log.Printf("Файл логов %s успешно очищен", cfg.AccessLogPath)
+				log.Printf("Файл логов %s успешно очищен", cfg.Core.AccessLog)
 
 			case <-ctx.Done():
 				return
@@ -534,7 +534,7 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 
 func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	server := &http.Server{
-		Addr:    "127.0.0.1:" + cfg.Port,
+		Addr:    "127.0.0.1:" + cfg.V2rayStat.Port,
 		Handler: nil,
 	}
 
@@ -578,7 +578,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg
 
 func main() {
 	// Load configuration
-	cfg, err := config.LoadConfig(".env")
+	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("Error loading configuration: %v", err)
 	}
@@ -626,7 +626,7 @@ func main() {
 		stats.MonitorStats(ctx, &cfg, &wg)
 	}
 
-	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.CoreType)
+	log.Printf("Starting v2ray-stat application %s, with core: %s", constant.Version, cfg.V2rayStat.Type)
 
 	// Wait for termination signal
 	<-sigChan

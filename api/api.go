@@ -395,7 +395,7 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		var statsBuilder strings.Builder
 
-		if features["stats"] {
+		if features["system_monitoring"] {
 			buildServerStateStats(&statsBuilder, services)
 		}
 		if features["network"] {
@@ -743,13 +743,13 @@ func UpdateRenewHandler(memDB *sql.DB, dbMutex *sync.Mutex) http.HandlerFunc {
 
 func AddUserToConfig(user, credential, inboundTag string, cfg *config.Config) error {
 	start := time.Now()
-	configPath := cfg.CoreConfig
+	configPath := cfg.Core.Config
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("error reading config.json: %v", err)
 	}
 
-	proxyType := cfg.CoreType
+	proxyType := cfg.V2rayStat.Type
 	var configData any
 	var protocol string // Для хранения типа протокола
 
@@ -912,9 +912,9 @@ func saveConfig(w http.ResponseWriter, configPath string, configData any, logMes
 
 func DeleteUserFromConfig(userIdentifier, inboundTag string, cfg *config.Config) error {
 	start := time.Now()
-	configPath := cfg.CoreConfig
-	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
-	proxyType := cfg.CoreType
+	configPath := cfg.Core.Config
+	disabledUsersPath := filepath.Join(cfg.Core.Dir, ".disabled_users")
+	proxyType := cfg.V2rayStat.Type
 
 	var userRemoved bool
 

@@ -32,7 +32,7 @@ func TokenAuthMiddleware(cfg *config.Config, next http.HandlerFunc) http.Handler
 		clientIP := getClientIP(r)
 
 		// Если токен не задан в конфигурации, разрешаем доступ
-		if cfg.APIToken == "" {
+		if cfg.API.APIToken == "" {
 			// log.Printf("Warning: API_TOKEN not set, allowing request from %s", clientIP)
 			next.ServeHTTP(w, r)
 			return
@@ -55,7 +55,7 @@ func TokenAuthMiddleware(cfg *config.Config, next http.HandlerFunc) http.Handler
 		}
 
 		// Проверяем токен
-		if parts[1] != cfg.APIToken {
+		if parts[1] != cfg.API.APIToken {
 			log.Printf("Invalid token from %s", clientIP)
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
 			return

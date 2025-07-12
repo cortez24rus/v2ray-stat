@@ -16,7 +16,7 @@ import (
 
 // SendDailyReport sends a daily Telegram notification with system and network stats.
 func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
-	if cfg.TelegramBotToken == "" || cfg.TelegramChatID == "" {
+	if cfg.Telegram.BotToken == "" || cfg.Telegram.ChatID == "" {
 		log.Println("Error: cannot send daily report: TelegramBotToken or TelegramChatID is missing")
 		return
 	}
@@ -58,10 +58,10 @@ func SendDailyReport(memDB *sql.DB, cfg *config.Config) {
 			"🔸 UDP: %d\n"+
 			"🚦 Traffic: %s (↑%s,↓%s)\n"+
 			"ℹ️ Status: %s",
-		constant.Version, strings.Title(cfg.CoreType), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uplinkTraffic, downlinkTraffic, serviceStatus,
+		constant.Version, strings.Title(cfg.V2rayStat.Type), coreVersion, ipv4, ipv6, uptime, loadAverage, memoryUsage, tcpCount, udpCount, totalTraffic, uplinkTraffic, downlinkTraffic, serviceStatus,
 	)
 
-	if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err != nil {
+	if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err != nil {
 		log.Printf("Error sending daily report to Telegram: %v", err)
 	} else {
 		log.Println("Daily report sent successfully to Telegram")

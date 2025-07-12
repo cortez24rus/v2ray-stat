@@ -11,7 +11,7 @@ import (
 // AddUserToAuthLua добавляет нового пользователя в начало таблицы users в файле auth.lua
 func AddUserToAuthLua(cfg *config.Config, user, uuid string) error {
 	// Открываем файл для чтения
-	file, err := os.Open(cfg.AuthLuaPath)
+	file, err := os.Open(cfg.Paths.AuthLua)
 	if err != nil {
 		return fmt.Errorf("failed to open auth.lua: %w", err)
 	}
@@ -66,7 +66,7 @@ func AddUserToAuthLua(cfg *config.Config, user, uuid string) error {
 	)
 
 	// Перезаписываем файл
-	out, err := os.Create(cfg.AuthLuaPath)
+	out, err := os.Create(cfg.Paths.AuthLua)
 	if err != nil {
 		return fmt.Errorf("failed to create auth.lua: %w", err)
 	}
@@ -88,7 +88,7 @@ func AddUserToAuthLua(cfg *config.Config, user, uuid string) error {
 // DeleteUserFromAuthLua удаляет пользователя из таблицы users в файле auth.lua
 func DeleteUserFromAuthLua(cfg *config.Config, user string) error {
 	// Открываем файл для чтения
-	file, err := os.Open(cfg.AuthLuaPath)
+	file, err := os.Open(cfg.Paths.AuthLua)
 	if err != nil {
 		return fmt.Errorf("failed to open auth.lua: %w", err)
 	}
@@ -142,7 +142,7 @@ func DeleteUserFromAuthLua(cfg *config.Config, user string) error {
 	}
 
 	// Перезаписываем файл
-	out, err := os.Create(cfg.AuthLuaPath)
+	out, err := os.Create(cfg.Paths.AuthLua)
 	if err != nil {
 		return fmt.Errorf("failed to create auth.lua: %w", err)
 	}

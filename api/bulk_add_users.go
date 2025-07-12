@@ -32,13 +32,13 @@ func generateRandomPassword() (string, error) {
 
 // getProtocolByInboundTag determines the protocol (vless or trojan) based on inboundTag
 func getProtocolByInboundTag(inboundTag string, cfg *config.Config) (string, error) {
-	configPath := cfg.CoreConfig
+	configPath := cfg.V2rayStat.Type
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("error reading config.json: %v", err)
 	}
 
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {

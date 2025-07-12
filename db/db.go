@@ -44,7 +44,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	}
 
 	// Чтение и обработка config.json
-	data, err := os.ReadFile(cfg.CoreConfig)
+	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
 		log.Printf("Error reading config.json: %v", err)
 	} else {
@@ -57,7 +57,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 	}
 
 	// Чтение и обработка .disabled_users
-	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+	disabledUsersPath := filepath.Join(cfg.Core.Dir, ".disabled_users")
 	disabledData, err := os.ReadFile(disabledUsersPath)
 	if err == nil {
 		// Проверяем, не пустой ли файл
@@ -83,7 +83,7 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 }
 
 func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
-	data, err := os.ReadFile(cfg.CoreConfig)
+	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
 		log.Printf("Error reading config.json for Singbox: %v", err)
 		return nil
@@ -120,7 +120,7 @@ func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
 
 func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	var clients []config.XrayClient
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		clients = extractUsersXrayServer(cfg)
 	case "singbox":
@@ -128,7 +128,7 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	}
 
 	if len(clients) == 0 {
-		log.Printf("No users found to add to the database for type %s", cfg.CoreType)
+		log.Printf("No users found to add to the database for type %s", cfg.V2rayStat.Type)
 		return nil
 	}
 
@@ -181,7 +181,7 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 
 func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	var clients []config.XrayClient
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		clients = extractUsersXrayServer(cfg)
 	case "singbox":
@@ -376,7 +376,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 			}
 
 			if subEnd.Before(start) {
-				canSendNotifications := cfg.TelegramBotToken != "" && cfg.TelegramChatID != ""
+				canSendNotifications := cfg.Telegram.BotToken != "" && cfg.Telegram.ChatID != ""
 
 				notifiedMutex.Lock()
 				if canSendNotifications && !notifiedUsers[s.User] {
@@ -384,7 +384,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 					message := fmt.Sprintf("❌ Subscription expired\n\n"+
 						"Client:   *%s*\n"+
 						"Expiration date:   *%s*", s.User, formattedDate)
-					if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
+					if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err == nil {
 						notifiedUsers[s.User] = true
 					}
 				}
@@ -404,7 +404,7 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
 							"Client:   *%s*\n"+
 							"Renewed for:   *%d days*", s.User, s.Renew)
-						if err := telegram.SendNotification(cfg.TelegramBotToken, cfg.TelegramChatID, message); err == nil {
+						if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err == nil {
 							renewNotifiedUsers[s.User] = true
 						}
 						notifiedMutex.Unlock()
@@ -472,13 +472,13 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 	}
 
 	// Извлекаем теги inbounds и outbounds из config.json
-	data, err := os.ReadFile(cfg.CoreConfig)
+	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
 		return fmt.Errorf("error reading config.json: %v", err)
 	}
 
 	validTags := make(map[string]bool)
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {
@@ -544,15 +544,15 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB, dbMutex *sync.Mutex) error {
 	start := time.Now()
 
-	mainConfigPath := cfg.CoreConfig
-	disabledUsersPath := filepath.Join(cfg.CoreDir, ".disabled_users")
+	mainConfigPath := cfg.Core.Config
+	disabledUsersPath := filepath.Join(cfg.Core.Dir, ".disabled_users")
 
 	status := "disabled"
 	if enabled {
 		status = "enabled"
 	}
 
-	switch cfg.CoreType {
+	switch cfg.V2rayStat.Type {
 	case "xray":
 		// Read main config for Xray
 		mainConfigData, err := os.ReadFile(mainConfigPath)
@@ -643,7 +643,7 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !clientMap[userIdentifier] {
 						newClients = append(newClients, client)
-						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.CoreType, time.Since(start))
+						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
 					}
 					targetInbounds[i].Settings.Clients = newClients
 				}
@@ -785,7 +785,7 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !userNameMap[userIdentifier] {
 						newUsers = append(newUsers, user)
-						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.CoreType, time.Since(start))
+						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
 					}
 					targetInbounds[i].Users = newUsers
 				}
@@ -971,7 +971,7 @@ func InitDB(db *sql.DB, dbType string) error {
         PRAGMA cache_size = 2000;
         PRAGMA journal_mode = MEMORY;
 
-		-- Create or update clients_stats table
+        -- Create or update clients_stats table
         CREATE TABLE IF NOT EXISTS clients_stats (
             user TEXT PRIMARY KEY,
             uuid TEXT,
@@ -989,17 +989,17 @@ func InitDB(db *sql.DB, dbType string) error {
             created TEXT
         );
 
-		-- Create traffic_stats table
+        -- Create traffic_stats table
         CREATE TABLE IF NOT EXISTS traffic_stats (
             source TEXT PRIMARY KEY,
-			rate INTEGER DEFAULT 0,
+            rate INTEGER DEFAULT 0,
             uplink INTEGER DEFAULT 0,
             downlink INTEGER DEFAULT 0,
             sess_uplink INTEGER DEFAULT 0,
             sess_downlink INTEGER DEFAULT 0
         );
 
-		-- Create dns_stats table
+        -- Create dns_stats table
         CREATE TABLE IF NOT EXISTS dns_stats (
             user TEXT NOT NULL,
             count INTEGER DEFAULT 1,
@@ -1054,7 +1054,7 @@ func InitDatabase(cfg *config.Config, dbMutex *sync.Mutex) (memDB, fileDB *sql.D
 	}
 
 	// Открываем или создаем файловую базу
-	fileDB, err = sql.Open("sqlite3", cfg.DatabasePath)
+	fileDB, err = sql.Open("sqlite3", cfg.Paths.Database)
 	if err != nil {
 		log.Printf("Error opening file database: %v", err)
 		memDB.Close()
@@ -1076,11 +1076,11 @@ func InitDatabase(cfg *config.Config, dbMutex *sync.Mutex) (memDB, fileDB *sql.D
 
 	// Проверяем существование файла базы данных
 	fileExists := true
-	if _, err := os.Stat(cfg.DatabasePath); os.IsNotExist(err) {
+	if _, err := os.Stat(cfg.Paths.Database); os.IsNotExist(err) {
 		fileExists = false
-		log.Printf("File database %s does not exist, will create new file database", cfg.DatabasePath)
+		log.Printf("File database %s does not exist, will create new file database", cfg.Paths.Database)
 	} else if err != nil {
-		log.Printf("Error checking file database %s: %v", cfg.DatabasePath, err)
+		log.Printf("Error checking file database %s: %v", cfg.Paths.Database, err)
 		memDB.Close()
 		fileDB.Close()
 		return nil, nil, fmt.Errorf("error checking file database: %v", err)
@@ -1092,13 +1092,13 @@ func InitDatabase(cfg *config.Config, dbMutex *sync.Mutex) (memDB, fileDB *sql.D
 		if err != nil {
 			fileDB.Close()
 			// Удаляем поврежденный файл
-			if err := os.Remove(cfg.DatabasePath); err != nil {
+			if err := os.Remove(cfg.Paths.Database); err != nil {
 				log.Printf("Error removing corrupted database file: %v", err)
 				memDB.Close()
 				return nil, nil, fmt.Errorf("error removing corrupted database file: %v", err)
 			}
 			// Создаем новую файловую базу
-			fileDB, err = sql.Open("sqlite3", cfg.DatabasePath)
+			fileDB, err = sql.Open("sqlite3", cfg.Paths.Database)
 			if err != nil {
 				log.Printf("Error creating new file database: %v", err)
 				memDB.Close()
