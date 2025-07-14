@@ -15,28 +15,98 @@ API для управления пользователями и статисти
 curl -X GET http://127.0.0.1:9952/api/v1/users
 ```
 
-### Статистика сервера
+### Получить статистику по серверу и клиентам
 
 **GET** `/api/v1/stats`
-- **Параметры**:
-  - `mode` (optional): Задаёт режим вывода статистики. Возможные значения:
-    - `minimal` (default):
-      - `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
-      - `clients_stats`: `User`, `Last seen`, `Rate`, `Uplink`, `Downlink`
-    - `standard`:
-      - `traffic_stats`: `Source`, `Rate`, `Upload`, `Download`
-      - `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`
-    - `extended`:
-      - `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
-      - `clients_stats`: `User`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`
-    - `full`:
-      - `traffic_stats`: `Source`, `Rate`, `Sess Up`, `Sess Down`, `Upload`, `Download`
-      - `clients_stats`: `User`, `ID`, `Last seen`, `Rate`, `Sess Up`, `Sess Down`, `Uplink`, `Downlink`, `Enabled`, `Sub end`, `Renew`, `Lim`, `Ips`, `Created`
-  - `sort_by` (optional): `user`, `rate`, `enabled`, `sub_end`, `renew`, `sess_uplink`, `sess_downlink`, `uplink`, `downlink`, `lim_ip` (default: `user`)
-  - `sort_order` (optional): `ASC` | `DESC` (default: `ASC`)
+
+Этот эндпоинт возвращает статистику по серверу и клиентам, в зависимости от конфигурации `stats_columns`.
 
 ```bash
-curl -X GET "http://127.0.0.1:9952/api/v1/stats?mode=extended&sort_by=user&sort_order=DESC"
+curl -X GET http://127.0.0.1:9952/api/v1/stats
+```
+
+#### Ответ зависит от настроек в конфигурации
+
+В файле конфигурации YAML можно указать, какие колонки выводить и по какому столбцу сортировать:
+
+```yaml
+stats_columns:
+  server:
+    sort: rate DESC
+    columns:
+      - source
+      - rate
+      - uplink
+      - downlink
+  client:
+    sort: user ASC
+    columns:
+      - user
+      - last_seen
+      - rate
+      - uplink
+      - downlink
+```
+
+#### Поддерживаемые колонки:
+
+* **Для server:**
+
+  * `source` — источник трафика (IP или hostname)
+  * `rate` — текущий трафик (бит/с)
+  * `uplink` — всего отправлено (байт)
+  * `downlink` — всего получено (байт)
+  * `sess_uplink` — отправлено в текущей сессии (байт)
+  * `sess_downlink` — получено в текущей сессии (байт)
+
+* **Для client:**
+
+  * `user` — имя пользователя или идентификатор
+  * `uuid` — уникальный идентификатор
+  * `last_seen` — время последней активности
+  * `rate` — текущий трафик (бит/с)
+  * `uplink` — всего отправлено (байт)
+  * `downlink` — всего получено (байт)
+  * `sess_uplink` — отправлено в текущей сессии (байт)
+  * `sess_downlink` — получено в текущей сессии (байт)
+  * `enabled` — включен ли пользователь
+  * `sub_end` — дата окончания подписки
+  * `renew` — статус/дата продления
+  * `lim_ip` — ограничение по IP
+  * `ips` — список IP-адресов
+  * `created` — дата создания
+
+#### Поведение по умолчанию:
+
+Если поле `columns` не указано или пустое, соответствующая статистика не отображается.
+
+Если поле `sort` не задано:
+
+* Для `server` используется `source ASC`
+* Для `client` используется `user ASC`
+
+Некорректные колонки или формат сортировки будут проигнорированы, и в логах появятся предупреждения.
+
+#### Пример конфигурации без статистики по серверу:
+
+```yaml
+stats_columns:
+  server:
+    columns: []
+  client:
+    columns:
+      - user
+      - rate
+      - uplink
+      - downlink
+```
+
+#### Параметры сортировки через URL
+
+Также можно переопределить сортировку для клиента через параметры запроса:
+
+```bash
+curl "http://127.0.0.1:9952/api/v1/stats?sort_by=rate&sort_order=DESC"
 ```
 
 ### Статистика DNS
