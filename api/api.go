@@ -112,30 +112,111 @@ func formatSpeed(speed float64) string {
 
 func formatTraffic(value int64, isRate bool) string {
 	if isRate {
-		// Для rate (бит/с)
-		if value >= 1000*1000*1000 {
-			return fmt.Sprintf("%.2f Gbps", float64(value)/1000.0/1000.0/1000.0)
-		} else if value >= 1000*1000 {
-			return fmt.Sprintf("%.2f Mbps", float64(value)/1000.0/1000.0)
-		} else if value >= 1000 {
-			return fmt.Sprintf("%.2f Kbps", float64(value)/1000.0)
+		// Константы для скоростей (бит/с)
+		const (
+			mbit = 1_000_000 // Мегабит
+			kbit = 1_000     // Килобит
+		)
+		switch {
+		case value >= mbit:
+			return fmt.Sprintf("%.2f Gbps", float64(value)/mbit)
+		case value >= kbit:
+			return fmt.Sprintf("%.2f Gbps", float64(value)/mbit)
+		default:
+			return fmt.Sprintf("%d bps", value)
 		}
-		return fmt.Sprintf("%d bps", value)
 	}
-	// Для uplink/downlink (байты)
-	if value >= 1024*1024*1024 {
-		return fmt.Sprintf("%.2f GB", float64(value)/1024.0/1024.0/1024.0)
-	} else if value >= 1024*1024 {
-		return fmt.Sprintf("%.2f MB", float64(value)/1024.0/1024.0)
-	} else if value >= 1024 {
-		return fmt.Sprintf("%.2f KB", float64(value)/1024.0)
+
+	// Константы для объемов трафика (байты)
+	const (
+		gib = 1_073_741_824 // Гигабайт (1024^3)
+		mib = 1_048_576     // Мегабайт (1024^2)
+		kib = 1_024         // Килобайт (1024)
+	)
+	switch {
+	case value >= gib:
+		return fmt.Sprintf("%.2f GB", float64(value)/gib)
+	case value >= mib:
+		return fmt.Sprintf("%.2f MB", float64(value)/mib)
+	case value >= kib:
+		return fmt.Sprintf("%.2f KB", float64(value)/kib)
+	default:
+		return fmt.Sprintf("%d B", value)
 	}
-	return fmt.Sprintf("%d B", value)
 }
 
 // appendStats is a helper to reduce repetitive WriteString calls
 func appendStats(builder *strings.Builder, content string) {
 	builder.WriteString(content)
+}
+
+func formatTable(rows *sql.Rows, trafficColumns []string) (string, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return "", fmt.Errorf("error retrieving column names: %v", err)
+	}
+
+	maxWidths := make([]int, len(columns))
+	for i, col := range columns {
+		maxWidths[i] = len(col)
+	}
+
+	var data [][]string
+	for rows.Next() {
+		values := make([]any, len(columns))
+		valuePtrs := make([]any, len(columns))
+		for i := range columns {
+			valuePtrs[i] = &values[i]
+		}
+
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return "", fmt.Errorf("error scanning row: %v", err)
+		}
+
+		row := make([]string, len(columns))
+		for i, val := range values {
+			strVal := fmt.Sprintf("%v", val)
+			if contains(trafficColumns, columns[i]) {
+				if numVal, ok := val.(int64); ok {
+					isRate := columns[i] == "Rate"
+					strVal = formatTraffic(numVal, isRate)
+				}
+			}
+			row[i] = strVal
+			if len(strVal) > maxWidths[i] {
+				maxWidths[i] = len(strVal)
+			}
+		}
+		data = append(data, row)
+	}
+
+	var header strings.Builder
+	for i, col := range columns {
+		header.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, col))
+	}
+	header.WriteString("\n")
+
+	var separator strings.Builder
+	for _, width := range maxWidths {
+		separator.WriteString(strings.Repeat("-", width) + "  ")
+	}
+	separator.WriteString("\n")
+
+	var table strings.Builder
+	table.WriteString(header.String())
+	table.WriteString(separator.String())
+	for _, row := range data {
+		for i, val := range row {
+			if contains(trafficColumns, columns[i]) {
+				table.WriteString(fmt.Sprintf("%*s  ", maxWidths[i], val))
+			} else {
+				table.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, val))
+			}
+		}
+		table.WriteString("\n")
+	}
+
+	return table.String(), nil
 }
 
 // buildServerStateStats collects server state statistics
@@ -160,6 +241,184 @@ func buildNetworkStats(builder *strings.Builder) {
 	}
 }
 
+func buildServerCustomStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
+	serverColumnAliases := map[string]string{
+		"source":        "Source",
+		"rate":          "Rate",
+		"uplink":        "Uplink",
+		"downlink":      "Downlink",
+		"sess_uplink":   "Sess Up",
+		"sess_downlink": "Sess Down",
+	}
+	trafficAliases := []string{
+		"Rate",
+		"Uplink",
+		"Downlink",
+		"Sess Up",
+		"Sess Down",
+	}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	// Server stats
+	if len(cfg.StatsColumns.Server.Columns) > 0 {
+		var serverCols []string
+		for _, col := range cfg.StatsColumns.Server.Columns {
+			if alias, ok := serverColumnAliases[col]; ok {
+				serverCols = append(serverCols, fmt.Sprintf("%s AS \"%s\"", col, alias))
+			}
+		}
+		serverQuery := fmt.Sprintf("SELECT %s FROM traffic_stats ORDER BY %s %s;",
+			strings.Join(serverCols, ", "), cfg.StatsColumns.Server.SortBy, cfg.StatsColumns.Server.SortOrder)
+
+		rows, err := memDB.Query(serverQuery)
+		if err != nil {
+			return fmt.Errorf("error executing custom server stats query: %v", err)
+		}
+		defer rows.Close()
+
+		appendStats(builder, "➤  Server Statistics:\n")
+		serverTable, err := formatTable(rows, trafficAliases)
+		if err != nil {
+			return fmt.Errorf("error formatting server stats table: %v", err)
+		}
+		appendStats(builder, serverTable)
+		appendStats(builder, "\n")
+	}
+	return nil
+}
+
+func buildClientCustomStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, sortBy, sortOrder string) error {
+	clientColumnAliases := map[string]string{
+		"user":          "User",
+		"uuid":          "ID",
+		"last_seen":     "Last seen",
+		"rate":          "Rate",
+		"uplink":        "Uplink",
+		"downlink":      "Downlink",
+		"sess_uplink":   "Sess Up",
+		"sess_downlink": "Sess Down",
+		"enabled":       "Enabled",
+		"sub_end":       "Sub end",
+		"renew":         "Renew",
+		"lim_ip":        "Lim",
+		"ips":           "Ips",
+		"created":       "Created",
+	}
+	clientAliases := []string{
+		"Rate",
+		"Uplink",
+		"Downlink",
+		"Sess Up",
+		"Sess Down",
+	}
+
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	// Client stats
+	if len(cfg.StatsColumns.Client.Columns) > 0 {
+		var clientCols []string
+		for _, col := range cfg.StatsColumns.Client.Columns {
+			if alias, ok := clientColumnAliases[col]; ok {
+				clientCols = append(clientCols, fmt.Sprintf("%s AS \"%s\"", col, alias))
+			}
+		}
+
+		clientSortBy := cfg.StatsColumns.Client.SortBy
+		if sortBy != "" {
+			clientSortBy = sortBy
+		}
+
+		clientSortOrder := cfg.StatsColumns.Client.SortOrder
+		if sortOrder != "" {
+			clientSortOrder = sortOrder
+		}
+
+		clientQuery := fmt.Sprintf("SELECT %s FROM clients_stats ORDER BY %s %s;",
+			strings.Join(clientCols, ", "), clientSortBy, clientSortOrder)
+
+		rows, err := memDB.Query(clientQuery)
+		if err != nil {
+			return fmt.Errorf("error executing custom client stats query: %v", err)
+		}
+		defer rows.Close()
+
+		appendStats(builder, "➤  Client Statistics:\n")
+		clientTable, err := formatTable(rows, clientAliases)
+		if err != nil {
+			return fmt.Errorf("error formatting client stats table: %v", err)
+		}
+		appendStats(builder, clientTable)
+	}
+	return nil
+}
+
+// StatsCustomHandler handles requests to /api/v1/stats_custom
+func StatsCustomHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+		if r.Method != http.MethodGet {
+			http.Error(w, "Invalid method. Use GET", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if memDB == nil {
+			http.Error(w, "Database not initialized", http.StatusInternalServerError)
+			return
+		}
+
+		sortBy := r.URL.Query().Get("sort_by")
+		sortOrder := r.URL.Query().Get("sort_order")
+
+		// Валидация sort_by
+		validSortColumns := []string{"user", "uuid", "last_seen", "rate", "sess_uplink", "sess_downlink", "uplink", "downlink", "enabled", "sub_end", "renew", "lim_ip", "ips", "created"}
+		if sortBy != "" && !contains(validSortColumns, sortBy) {
+			http.Error(w, fmt.Sprintf("Invalid sort_by parameter: %s, must be one of %v", sortBy, validSortColumns), http.StatusBadRequest)
+			return
+		}
+
+		// Валидация sort_order
+		if sortOrder != "" && sortOrder != "ASC" && sortOrder != "DESC" {
+			http.Error(w, fmt.Sprintf("Invalid sort_order parameter: %s, must be ASC or DESC", sortOrder), http.StatusBadRequest)
+			return
+		}
+
+		var statsBuilder strings.Builder
+
+		if cfg.Features["system_monitoring"] {
+			buildServerStateStats(&statsBuilder, cfg.Services)
+		}
+		if cfg.Features["network"] {
+			buildNetworkStats(&statsBuilder)
+		}
+
+		// Формируем серверную статистику
+		if err := buildServerCustomStats(&statsBuilder, memDB, dbMutex, cfg); err != nil {
+			log.Printf("Server stats error: %v", err)
+			http.Error(w, "Server stats query failed", http.StatusInternalServerError)
+			return
+		}
+
+		// Формируем клиентскую статистику
+		if err := buildClientCustomStats(&statsBuilder, memDB, dbMutex, cfg, sortBy, sortOrder); err != nil {
+			log.Printf("Client stats error: %v", err)
+			http.Error(w, "Client stats query failed", http.StatusInternalServerError)
+			return
+		}
+
+		// If no data to display
+		if statsBuilder.String() == "" {
+			fmt.Fprintln(w, "No custom columns specified in config.")
+			return
+		}
+
+		fmt.Fprintln(w, statsBuilder.String())
+	}
+}
+
 func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mutex, mode, sortBy, sortOrder string) {
 	if memDB == nil {
 		log.Printf("Database not initialized in buildTrafficStats")
@@ -168,75 +427,6 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 
 	dbMutex.Lock()
 	defer dbMutex.Unlock()
-
-	formatTable := func(rows *sql.Rows, trafficColumns []string) (string, error) {
-		columns, err := rows.Columns()
-		if err != nil {
-			return "", fmt.Errorf("error retrieving column names: %v", err)
-		}
-
-		maxWidths := make([]int, len(columns))
-		for i, col := range columns {
-			maxWidths[i] = len(col)
-		}
-
-		var data [][]string
-		for rows.Next() {
-			values := make([]any, len(columns))
-			valuePtrs := make([]any, len(columns))
-			for i := range columns {
-				valuePtrs[i] = &values[i]
-			}
-
-			if err := rows.Scan(valuePtrs...); err != nil {
-				return "", fmt.Errorf("error scanning row: %v", err)
-			}
-
-			row := make([]string, len(columns))
-			for i, val := range values {
-				strVal := fmt.Sprintf("%v", val)
-				if contains(trafficColumns, columns[i]) {
-					if numVal, ok := val.(int64); ok {
-						isRate := columns[i] == "Rate"
-						strVal = formatTraffic(numVal, isRate)
-					}
-				}
-				row[i] = strVal
-				if len(strVal) > maxWidths[i] {
-					maxWidths[i] = len(strVal)
-				}
-			}
-			data = append(data, row)
-		}
-
-		var header strings.Builder
-		for i, col := range columns {
-			header.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, col))
-		}
-		header.WriteString("\n")
-
-		var separator strings.Builder
-		for _, width := range maxWidths {
-			separator.WriteString(strings.Repeat("-", width) + "  ")
-		}
-		separator.WriteString("\n")
-
-		var table strings.Builder
-		table.WriteString(header.String())
-		table.WriteString(separator.String())
-		for _, row := range data {
-			for i, val := range row {
-				if contains(trafficColumns, columns[i]) {
-					table.WriteString(fmt.Sprintf("%*s  ", maxWidths[i], val))
-				} else {
-					table.WriteString(fmt.Sprintf("%-*s", maxWidths[i]+2, val))
-				}
-			}
-			table.WriteString("\n")
-		}
-
-		return table.String(), nil
-	}
 
 	appendStats(builder, "➤  Server Statistics:\n")
 	var serverQuery string
@@ -352,7 +542,7 @@ func buildTrafficStats(builder *strings.Builder, memDB *sql.DB, dbMutex *sync.Mu
 	appendStats(builder, clientTable)
 }
 
-func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, features map[string]bool) http.HandlerFunc {
+func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
@@ -361,7 +551,6 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 			return
 		}
 
-		// Проверяем параметр mode
 		mode := r.URL.Query().Get("mode")
 		validModes := []string{"minimal", "standard", "extended", "full"}
 		if !contains(validModes, mode) {
@@ -372,7 +561,6 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 			mode = "minimal"
 		}
 
-		// Проверяем параметр sort_by
 		sortBy := r.URL.Query().Get("sort_by")
 		validSortColumns := []string{"user", "uuid", "last_seen", "rate", "sess_uplink", "sess_downlink", "uplink", "downlink", "enabled", "sub_end", "renew", "lim_ip", "ips", "created"}
 		if !contains(validSortColumns, sortBy) {
@@ -383,7 +571,6 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 			sortBy = "user"
 		}
 
-		// Проверяем параметр sort_order
 		sortOrder := r.URL.Query().Get("sort_order")
 		if sortOrder != "ASC" && sortOrder != "DESC" {
 			if sortOrder != "" {
@@ -395,10 +582,10 @@ func StatsHandler(memDB *sql.DB, dbMutex *sync.Mutex, services []string, feature
 
 		var statsBuilder strings.Builder
 
-		if features["system_monitoring"] {
-			buildServerStateStats(&statsBuilder, services)
+		if cfg.Features["system_monitoring"] {
+			buildServerStateStats(&statsBuilder, cfg.Services)
 		}
-		if features["network"] {
+		if cfg.Features["network"] {
 			buildNetworkStats(&statsBuilder)
 		}
 		buildTrafficStats(&statsBuilder, memDB, dbMutex, mode, sortBy, sortOrder)

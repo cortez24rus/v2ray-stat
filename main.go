@@ -539,8 +539,9 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg
 	}
 
 	// Эндпоинты только для чтения (без токена)
-	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, dbMutex, cfg.Services, cfg.Features))
 	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, dbMutex))
+	http.HandleFunc("/api/v1/stats", api.StatsHandler(memDB, dbMutex, cfg))
+	http.HandleFunc("/api/v1/stats_custom", api.StatsCustomHandler(memDB, dbMutex, cfg))
 	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, dbMutex))
 
 	// Эндпоинты, изменяющие данные (с проверкой токена)

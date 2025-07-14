@@ -155,20 +155,23 @@ func readNetworkStats(iface string) (NetworkStats, error) {
 }
 
 // FormatTraffic formats traffic volume in human-readable units
-func FormatTraffic(bytes uint64) string {
+func FormatTraffic(value uint64) string {
+	// Константы для объемов трафика (байты)
 	const (
-		kb = 1024
-		mb = 1024 * 1024
-		gb = 1024 * 1024 * 1024
+		gib = 1_073_741_824 // Гигабайт (1024^3)
+		mib = 1_048_576     // Мегабайт (1024^2)
+		kib = 1_024         // Килобайт (1024)
 	)
-	if bytes >= gb {
-		return fmt.Sprintf("%.2f GB", float64(bytes)/gb)
-	} else if bytes >= mb {
-		return fmt.Sprintf("%.2f MB", float64(bytes)/mb)
-	} else if bytes >= kb {
-		return fmt.Sprintf("%.2f KB", float64(bytes)/kb)
+	switch {
+	case value >= gib:
+		return fmt.Sprintf("%.2f GB", float64(value)/gib)
+	case value >= mib:
+		return fmt.Sprintf("%.2f MB", float64(value)/mib)
+	case value >= kib:
+		return fmt.Sprintf("%.2f KB", float64(value)/kib)
+	default:
+		return fmt.Sprintf("%d B", value)
 	}
-	return fmt.Sprintf("%d B", bytes)
 }
 
 // Запуск мониторинга сети
