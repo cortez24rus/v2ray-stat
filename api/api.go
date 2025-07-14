@@ -119,9 +119,9 @@ func formatTraffic(value int64, isRate bool) string {
 		)
 		switch {
 		case value >= mbit:
-			return fmt.Sprintf("%.2f Gbps", float64(value)/mbit)
+			return fmt.Sprintf("%.2f Mbps", float64(value)/mbit)
 		case value >= kbit:
-			return fmt.Sprintf("%.2f Gbps", float64(value)/mbit)
+			return fmt.Sprintf("%.2f Kbps", float64(value)/kbit)
 		default:
 			return fmt.Sprintf("%d bps", value)
 		}
