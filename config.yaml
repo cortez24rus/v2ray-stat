@@ -4,7 +4,7 @@
 # v2ray-stat Settings
 v2ray-stat:
   type: xray                             # Type of proxy core used for statistics. Accepted values: xray, singbox.
-  address: 127.0.0.1
+  address: 127.0.0.1                     # IP address of the v2ray-stat API server. 127.0.0.1 means it is accessible only locally (localhost).
   port: 9952                             # TCP port for v2ray-stat API server. Must be between 1 and 65535.
   monitor:
     ticker_interval: 10                  # Interval (in seconds) for polling monitored services and users. Recommended: 5–60.
