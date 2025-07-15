@@ -15,8 +15,8 @@ import (
 
 // Config holds the configuration settings for the application.
 type Config struct {
-	Core             CoreConfig             `yaml:"core"`
 	V2rayStat        V2rayStatConfig        `yaml:"v2ray-stat"`
+	Core             CoreConfig             `yaml:"core"`
 	API              APIConfig              `yaml:"api"`
 	Timezone         string                 `yaml:"timezone"`
 	Features         map[string]bool        `yaml:"features"`
@@ -28,19 +28,20 @@ type Config struct {
 	StatsColumns     StatsColumns           `yaml:"stats_columns"`
 }
 
+// V2rayStatConfig holds v2ray-stat specific settings.
+type V2rayStatConfig struct {
+	Type    string        `yaml:"type"`
+	Address string        `yaml:"address"`
+	Port    string        `yaml:"port"`
+	Monitor MonitorConfig `yaml:"monitor"`
+}
+
 // CoreConfig holds core-related settings.
 type CoreConfig struct {
 	Dir            string `yaml:"dir"`
 	Config         string `yaml:"config"`
 	AccessLog      string `yaml:"access_log"`
 	AccessLogRegex string `yaml:"access_log_regex"`
-}
-
-// V2rayStatConfig holds v2ray-stat specific settings.
-type V2rayStatConfig struct {
-	Type    string        `yaml:"type"`
-	Port    string        `yaml:"port"`
-	Monitor MonitorConfig `yaml:"monitor"`
 }
 
 // MonitorConfig holds monitoring-related settings.

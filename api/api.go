@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"v2ray-stat/config"
+	"v2ray-stat/constant"
 	"v2ray-stat/db"
 	"v2ray-stat/lua"
 	"v2ray-stat/stats"
@@ -1400,5 +1401,15 @@ func AdjustDateOffsetHandler(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 			http.Error(w, "Error sending response", http.StatusInternalServerError)
 			return
 		}
+	}
+}
+
+func Answer() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		serverHeader := fmt.Sprintf("MuxCloud/%s (WebServer)", constant.Version)
+		w.Header().Set("Server", serverHeader)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("X-Powered-By", "MuxCloud")
+		fmt.Fprintf(w, "MuxCloud / %s\n", constant.Version)
 	}
 }

@@ -532,16 +532,28 @@ func monitorUsersAndLogs(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex
 	}()
 }
 
+// withServerHeader добавляет заголовок Server ко всем ответам
+func withServerHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serverHeader := fmt.Sprintf("MuxCloud/%s (WebServer)", constant.Version)
+		w.Header().Set("Server", serverHeader)
+		w.Header().Set("X-Powered-By", "MuxCloud")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
 	server := &http.Server{
-		Addr:    "127.0.0.1:" + cfg.V2rayStat.Port,
-		Handler: nil,
+		Addr:    cfg.V2rayStat.Address + ":" + cfg.V2rayStat.Port,
+		Handler: withServerHeader(http.DefaultServeMux),
 	}
+	// Заглушка
+	http.HandleFunc("/", api.Answer())
 
 	// Эндпоинты только для чтения (без токена)
 	http.HandleFunc("/api/v1/users", api.UsersHandler(memDB, dbMutex))
-	http.HandleFunc("/api/v1/stats/base", api.StatsHandler(memDB, dbMutex, cfg))
 	http.HandleFunc("/api/v1/stats", api.StatsCustomHandler(memDB, dbMutex, cfg))
+	http.HandleFunc("/api/v1/stats/base", api.StatsHandler(memDB, dbMutex, cfg))
 	http.HandleFunc("/api/v1/dns_stats", api.DnsStatsHandler(memDB, dbMutex))
 
 	// Эндпоинты, изменяющие данные (с проверкой токена)
@@ -558,7 +570,7 @@ func startAPIServer(ctx context.Context, memDB *sql.DB, dbMutex *sync.Mutex, cfg
 	http.HandleFunc("/api/v1/reset_traffic_stats", api.TokenAuthMiddleware(cfg, api.ResetTrafficStatsHandler(memDB, dbMutex)))
 
 	go func() {
-		// log.Printf("API server starting on 127.0.0.1:%s...", cfg.Port)
+		// log.Printf("API server starting on %s:%s...", cfg.V2rayStat.Address, cfg.V2rayStat.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Error starting server: %v", err)
 		}
