@@ -96,9 +96,6 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 		return
 	}
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	currentValues := make(map[string]int)
 	previousValues := make(map[string]int)
 
@@ -176,9 +173,11 @@ func updateProxyStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mut
 		`, source, rate, uplink, downlink, sessUplink, sessDownlink,
 			rate, uplink, downlink, sessUplink, sessDownlink)
 	}
-
+	//
 	if queries != "" {
+		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Ошибка SQL в updateProxyStats: %v", err)
 			return
@@ -193,9 +192,6 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 		clientPreviousStats = strings.Join(clientCurrentStats, "\n")
 		return
 	}
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
 
 	clientCurrentValues := make(map[string]int)
 	clientPreviousValues := make(map[string]int)
@@ -329,7 +325,9 @@ func updateClientStats(memDB *sql.DB, apiData *api.ApiResponse, dbMutex *sync.Mu
 	isInactiveMutex.Unlock()
 
 	if queries != "" {
+		dbMutex.Lock()
 		_, err := memDB.Exec(queries)
+		dbMutex.Unlock()
 		if err != nil {
 			log.Printf("Ошибка SQL в updateClientStats: %v", err)
 			return
