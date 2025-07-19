@@ -2,7 +2,7 @@
 # This file specifies paths and settings for the v2ray-stat monitoring application.
 
 log:
-  loglevel: info                         # Logging level: none, error, warp, info, debug. NONE disables logging; each level includes messages from lower levels.
+  loglevel: none                         # Logging level: none, error, warp, info, debug. NONE disables logging; each level includes messages from lower levels.
 
 # v2ray-stat Settings
 v2ray-stat:
@@ -18,16 +18,15 @@ core:
   dir: /usr/local/etc/xray/                                                           # Directory path where the proxy (Xray or Singbox) config files are stored. Must end with a slash (/).
   config: /usr/local/etc/xray/config.json                                             # Path to the main configuration file for the proxy core (e.g., Xray or Singbox config).
   access_log: /usr/local/etc/xray/access.log                                          # Path to the proxy core's access log file for tracking user sessions and IPs.
-  access_log_regex: 'from (?:tcp|udp):([\d\.]+):\d+ accepted (?:tcp|udp):([\w\.\-]+):\d+ \[[^\]]+\] email: (\S+)'
-  # Regular expression to parse access log. Should extract source IP, destination host, and user email/remark.
-  # access_log_regex: 'login: (\S+); ip: ([0-9\.]+)'                                  # Alternative regex (e.g., for custom login formats):
+  access_log_regex: 'from (?:tcp|udp):([\d\.]+):\d+ accepted (?:tcp|udp):([\w\.\-]+):\d+ \[[^\]]+\] email: (\S+)'  # Regular expression to parse access log. Should extract source IP, destination host, and user email/remark.
+  # access_log_regex: 'login: (\S+); ip: ([0-9\.]+)'                                  # Alternative regex format lua (e.g., for custom login formats):
 
 # API Settings
 api:
   api_token: ""                          # Token required to access the API endpoints. If empty, access is allowed without authorization. Format: Bearer <token>.
 
 # Timezone Settings
-timezone: Asia/Krasnoyarsk               # IANA timezone name (e.g., Europe/Amsterdam, Asia/Singapore). If empty, uses TZ environment variable or UTC.
+timezone: Europe/Amsterdam               # IANA timezone name (e.g., Europe/Amsterdam, Asia/Singapore). If empty, uses TZ environment variable or UTC.
 
 # Features & Monitoring Options
 features:
@@ -45,8 +44,8 @@ services:
 
 # Telegram Notifications
 telegram:
-  chat_id: "306100972"                                         # Chat or group ID for Telegram bot notifications. Leave empty to disable.
-  bot_token: "7998362423:AAGI95NWGvwuFYXox_95PeHp-j0z9tgN50c"  # API token for the Telegram bot. Leave empty to disable.
+  chat_id: ""                                         # Chat or group ID for Telegram bot notifications. Leave empty to disable.
+  bot_token: ""  # API token for the Telegram bot. Leave empty to disable.
 
 # System Monitoring
 system_monitoring:
@@ -89,5 +88,5 @@ stats_columns:
       # - sub_end                        # Subscription end date for the client.
       # - renew                          # Renewal status or date for the client.
       # - lim_ip                         # IP limit for the client (number of allowed IPs).
-      - ips                              # List of IPs used by the client.
+      # - ips                            # List of IPs used by the client.
       # - created                        # Timestamp when the client was created.
