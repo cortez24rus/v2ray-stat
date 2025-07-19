@@ -2,15 +2,18 @@ package util
 
 import "fmt"
 
-// FormatData форматирует значения скорости или трафика в человеко-читаемый вид.
 // unit: "bps" для скорости/трафика в битах (Gbps, Mbps, kbps, bps), "byte" для трафика в байтах (GB, MB, KB, B).
 func FormatData(value float64, unit string) string {
+	const (
+		mbit = 1_000_000
+		kbit = 1_000
+		GiB  = 1 << 30
+		MiB  = 1 << 20
+		KiB  = 1 << 10
+	)
+
 	switch unit {
 	case "bps":
-		const (
-			mbit = 1_000_000
-			kbit = 1_000
-		)
 		switch {
 		case value >= mbit:
 			return fmt.Sprintf("%.2f Mbps", value/mbit)
@@ -20,11 +23,6 @@ func FormatData(value float64, unit string) string {
 			return fmt.Sprintf("%.0f bps", value)
 		}
 	case "byte":
-		const (
-			GiB = 1_073_741_824
-			MiB = 1_048_576
-			KiB = 1_024
-		)
 		switch {
 		case value >= GiB:
 			return fmt.Sprintf("%.2f GiB", value/GiB)

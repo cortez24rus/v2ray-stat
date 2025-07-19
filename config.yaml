@@ -2,7 +2,7 @@
 # This file specifies paths and settings for the v2ray-stat monitoring application.
 
 log:
-  loglevel: none                         # Logging level: none, error, warp, info, debug. NONE disables logging; each level includes messages from lower levels.
+  loglevel: warn                         # Logging level: none, error, warn, info, debug. NONE disables logging; each level includes messages from lower levels.
 
 # v2ray-stat Settings
 v2ray-stat:
