@@ -154,26 +154,6 @@ func readNetworkStats(iface string) (NetworkStats, error) {
 	return NetworkStats{}, fmt.Errorf("interface %s not found", iface)
 }
 
-// FormatTraffic formats traffic volume in human-readable units
-func FormatTraffic(value uint64) string {
-	// Константы для объемов трафика (байты)
-	const (
-		gib = 1_073_741_824 // Гигабайт (1024^3)
-		mib = 1_048_576     // Мегабайт (1024^2)
-		kib = 1_024         // Килобайт (1024)
-	)
-	switch {
-	case value >= gib:
-		return fmt.Sprintf("%.2f GB", float64(value)/gib)
-	case value >= mib:
-		return fmt.Sprintf("%.2f MB", float64(value)/mib)
-	case value >= kib:
-		return fmt.Sprintf("%.2f KB", float64(value)/kib)
-	default:
-		return fmt.Sprintf("%d B", value)
-	}
-}
-
 // Запуск мониторинга сети
 func MonitorNetwork(ctx context.Context, cfg *config.Config, wg *sync.WaitGroup) {
 	trafficMonitor := GetTrafficMonitor()

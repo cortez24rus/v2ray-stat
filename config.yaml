@@ -1,48 +1,52 @@
 # v2ray-stat Configuration File
 # This file specifies paths and settings for the v2ray-stat monitoring application.
 
+log:
+  loglevel: info                         # Logging level: none, error, warp, info, debug. NONE disables logging; each level includes messages from lower levels.
+
 # v2ray-stat Settings
 v2ray-stat:
   type: xray                             # Type of proxy core used for statistics. Accepted values: xray, singbox.
   address: 127.0.0.1                     # IP address of the v2ray-stat API server. 127.0.0.1 means it is accessible only locally (localhost).
   port: 9952                             # TCP port for v2ray-stat API server. Must be between 1 and 65535.
   monitor:
-    ticker_interval: 10                  # Interval (in seconds) for polling monitored services and users. Recommended: 5–60.
-    online_rate_threshold: 0             # Minimum rate threshold in kilobits per second (kbps) to consider a user online. 0 means any non-zero rate is considered online.
+    ticker_interval: 20                  # Interval (in seconds) for polling monitored services and users. Recommended: 5–60.
+    online_rate_threshold: 15            # Minimum rate threshold in kilobits per second (kbps) to consider a user online. 0 means any non-zero rate is considered online.
 
 # Core Settings
 core:
-  dir: /usr/local/etc/xray/                                                     # Directory path where the proxy (Xray or Singbox) config files are stored. Must end with a slash (/).
-  config: /usr/local/etc/xray/config.json                                       # Path to the main configuration file for the proxy core (e.g., Xray or Singbox config).
-  access_log: /usr/local/etc/xray/access.log                                    # Path to the proxy core's access log file for tracking user sessions and IPs.
-  access_log_regex: 'from tcp:([0-9\.]+).*?tcp:([\w\.\-]+):\d+.*?email: (\S+)'  # Regular expression to parse access log. Should extract source IP, destination host, and user email/remark.
-  # access_log_regex: 'login: (\S+); ip: ([0-9\.]+)'                            # Alternative regex (e.g., for logging via LUA):
+  dir: /usr/local/etc/xray/                                                           # Directory path where the proxy (Xray or Singbox) config files are stored. Must end with a slash (/).
+  config: /usr/local/etc/xray/config.json                                             # Path to the main configuration file for the proxy core (e.g., Xray or Singbox config).
+  access_log: /usr/local/etc/xray/access.log                                          # Path to the proxy core's access log file for tracking user sessions and IPs.
+  access_log_regex: 'from (?:tcp|udp):([\d\.]+):\d+ accepted (?:tcp|udp):([\w\.\-]+):\d+ \[[^\]]+\] email: (\S+)'
+  # Regular expression to parse access log. Should extract source IP, destination host, and user email/remark.
+  # access_log_regex: 'login: (\S+); ip: ([0-9\.]+)'                                  # Alternative regex (e.g., for custom login formats):
 
 # API Settings
 api:
   api_token: ""                          # Token required to access the API endpoints. If empty, access is allowed without authorization. Format: Bearer <token>.
 
 # Timezone Settings
-timezone:                                # IANA timezone name (e.g., Europe/Amsterdam, Asia/Singapore). If empty, uses TZ environment variable or UTC.
+timezone: Asia/Krasnoyarsk               # IANA timezone name (e.g., Europe/Amsterdam, Asia/Singapore). If empty, uses TZ environment variable or UTC.
 
 # Features & Monitoring Options
 features:
-  telegram: false                        # Enables Telegram notifications for periodic user reports and daily statistics.
-  network: false                         # Enables real-time network usage monitoring.
-  system_monitoring: false               # Enables system-level monitoring (memory and disk usage).
-  auth_lua: false                        # Enables dynamic updates to HAProxy's auth.lua file for credential management.
+  telegram: false                         # Enables Telegram notifications for periodic user reports and daily statistics.
+  network: false                          # Enables real-time network usage monitoring.
+  system_monitoring: false                # Enables system-level monitoring (memory and disk usage).
+  auth_lua: false                         # Enables dynamic updates to HAProxy's auth.lua file for credential management.
 
 # List of system services to monitor and notify on failure. Any valid system service can be specified here (e.g., xray, haproxy, nginx, or custom services).
 services:
   - xray
   - haproxy
   - nginx
-  - warp-cli
+  - warp-svc
 
 # Telegram Notifications
 telegram:
-  chat_id: ""                            # Chat or group ID for Telegram bot notifications. Leave empty to disable.
-  bot_token: ""                          # API token for the Telegram bot. Leave empty to disable.
+  chat_id: "306100972"                                         # Chat or group ID for Telegram bot notifications. Leave empty to disable.
+  bot_token: "7998362423:AAGI95NWGvwuFYXox_95PeHp-j0z9tgN50c"  # API token for the Telegram bot. Leave empty to disable.
 
 # System Monitoring
 system_monitoring:
@@ -62,28 +66,28 @@ paths:
 # Statistics Columns Configuration
 stats_columns:
   server:
-    # sort: rate DESC                    # Sorting rule for server statistics. Format: "<column> <ASC|DESC>". Default: "source ASC". Valid columns: source, rate, uplink, downlink, sess_uplink, sess_downlink.
+    sort: rate DESC                      # Sorting rule for server statistics. Format: "<column> <ASC|DESC>". Default: "source ASC". Valid columns: source, rate, uplink, downlink, sess_uplink, sess_downlink.
     columns:                             # List of columns to display in server statistics. If empty, no server statistics are shown.
-      - source                           # Source of traffic (e.g., inbound/outbound).
-      - rate                             # Current traffic rate in bits per second.
-      - uplink                           # Total uploaded traffic.
-      - downlink                         # Total downloaded traffic.
-      # - sess_uplink                    # Session-based uploaded traffic.
-      # - sess_downlink                  # Session-based downloaded traffic.
+      - source                           # Source of traffic (e.g., IP or hostname).
+      - rate                             # Current traffic rate in bits per second (bps).
+      - uplink                           # Total uploaded traffic in bytes.
+      - downlink                         # Total downloaded traffic in bytes.
+      # - sess_uplink                    # Session-based uploaded traffic in bytes.
+      # - sess_downlink                  # Session-based downloaded traffic in bytes.
   client:
-    # sort: rate DESC                    # Sorting rule for client statistics. Format: "<column> <ASC|DESC>". Default: "user ASC". Valid columns: user, uuid, last_seen, rate, uplink, downlink, sess_uplink, sess_downlink, enabled, sub_end, renew, lim_ip, ips, created. Can be overridden via URL parameters (?sort_by=<column>&sort_order=<ASC|DESC>).
+    sort: last_seen DESC                 # Sorting rule for client statistics. Format: "<column> <ASC|DESC>". Default: "user ASC". Valid columns: user, uuid, last_seen, rate, uplink, downlink, sess_uplink, sess_downlink, enabled, sub_end, renew, lim_ip, ips, created. Can be overridden via URL parameters (?sort_by=<column>&sort_order=<ASC|DESC>).
     columns:                             # List of columns to display in client statistics. If empty, no client statistics are shown.
       - user                             # Client username or identifier.
-      # - uuid                           # Unique client identifier (UUID, password).
+      # - uuid                           # Unique client identifier (UUID).
       - last_seen                        # Timestamp of the last client activity.
-      - rate                             # Current traffic rate in bits per second.
-      - uplink                           # Total uploaded traffic.
-      - downlink                         # Total downloaded traffic.
-      # - sess_uplink                    # Session-based uploaded traffic.
-      # - sess_downlink                  # Session-based downloaded traffic.
+      - rate                             # Current traffic rate in bits per second (bps).
+      - uplink                           # Total uploaded traffic in bytes.
+      - downlink                         # Total downloaded traffic in bytes.
+      # - sess_uplink                    # Session-based uploaded traffic in bytes.
+      # - sess_downlink                  # Session-based downloaded traffic in bytes.
       # - enabled                        # Whether the client is enabled (true/false).
       # - sub_end                        # Subscription end date for the client.
       # - renew                          # Renewal status or date for the client.
       # - lim_ip                         # IP limit for the client (number of allowed IPs).
-      # - ips                            # List of IPs used by the client.
+      - ips                              # List of IPs used by the client.
       # - created                        # Timestamp when the client was created.

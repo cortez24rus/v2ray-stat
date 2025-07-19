@@ -15,9 +15,8 @@ import (
 	"time"
 
 	"v2ray-stat/config"
+	"v2ray-stat/manager"
 	"v2ray-stat/telegram"
-
-	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 var (
@@ -31,10 +30,7 @@ var (
 )
 
 func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
-	// Карта для уникальных пользователей по user
 	clientMap := make(map[string]config.XrayClient)
-
-	// Функция для извлечения пользователей из inbounds
 	extractClients := func(inbounds []config.XrayInbound) {
 		for _, inbound := range inbounds {
 			for _, client := range inbound.Settings.Clients {
@@ -43,55 +39,50 @@ func extractUsersXrayServer(cfg *config.Config) []config.XrayClient {
 		}
 	}
 
-	// Чтение и обработка config.json
 	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
-		log.Printf("Error reading config.json: %v", err)
+		log.Printf("Ошибка чтения config.json: %v", err)
 	} else {
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			log.Printf("Error parsing JSON from config.json: %v", err)
+			log.Printf("Ошибка разбора JSON из config.json: %v", err)
 		} else {
 			extractClients(cfgXray.Inbounds)
 		}
 	}
 
-	// Чтение и обработка .disabled_users
 	disabledUsersPath := filepath.Join(cfg.Core.Dir, ".disabled_users")
 	disabledData, err := os.ReadFile(disabledUsersPath)
 	if err == nil {
-		// Проверяем, не пустой ли файл
 		if len(disabledData) != 0 {
 			var disabledCfg config.DisabledUsersConfigXray
 			if err := json.Unmarshal(disabledData, &disabledCfg); err != nil {
-				log.Printf("Error parsing JSON from .disabled_users: %v", err)
+				log.Printf("Ошибка разбора JSON из .disabled_users: %v", err)
 			} else {
 				extractClients(disabledCfg.Inbounds)
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		log.Printf("Error reading .disabled_users: %v", err)
+		log.Printf("Ошибка чтения .disabled_users: %v", err)
 	}
 
-	// Преобразование карты в список
 	var clients []config.XrayClient
 	for _, client := range clientMap {
 		clients = append(clients, client)
 	}
-
 	return clients
 }
 
 func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
 	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
-		log.Printf("Error reading config.json for Singbox: %v", err)
+		log.Printf("Ошибка чтения config.json для Singbox: %v", err)
 		return nil
 	}
 
 	var cfgSingbox config.ConfigSingbox
 	if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-		log.Printf("Error parsing JSON for Singbox: %v", err)
+		log.Printf("Ошибка разбора JSON для Singbox: %v", err)
 		return nil
 	}
 
@@ -109,16 +100,15 @@ func extractUsersSingboxServer(cfg *config.Config) []config.XrayClient {
 					client.ID = user.Password
 					client.Password = user.UUID
 				}
-
 				clients = append(clients, client)
 			}
 		}
 	}
-
 	return clients
 }
 
-func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
+func AddUserToDB(manager *manager.DatabaseManager, cfg *config.Config) error {
+	start := time.Now()
 	var clients []config.XrayClient
 	switch cfg.V2rayStat.Type {
 	case "xray":
@@ -128,58 +118,56 @@ func AddUserToDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
 	}
 
 	if len(clients) == 0 {
-		log.Printf("No users found to add to the database for type %s", cfg.V2rayStat.Type)
+		log.Printf("Не найдены пользователи для добавления в базу данных для типа %s [%v]", cfg.V2rayStat.Type, time.Since(start))
 		return nil
 	}
 
-	start := time.Now()
 	var addedUsers []string
 	currentTime := time.Now().Format("2006-01-02-15")
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	tx, err := memDB.Begin()
-	if err != nil {
-		return fmt.Errorf("error starting transaction: %v", err)
-	}
-
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(user, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
-	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("error preparing statement: %v", err)
-	}
-	defer stmt.Close()
-
-	for _, client := range clients {
-		result, err := stmt.Exec(client.Email, client.ID, "0", "true", currentTime)
+	err := manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+		tx, err := db.Begin()
 		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error inserting client %s: %v", client.Email, err)
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
 		}
+		defer tx.Rollback()
 
-		rowsAffected, err := result.RowsAffected()
+		stmt, err := tx.Prepare("INSERT OR IGNORE INTO clients_stats(user, uuid, rate, enabled, created) VALUES (?, ?, ?, ?, ?)")
 		if err != nil {
-			tx.Rollback()
-			return fmt.Errorf("error getting RowsAffected for client %s: %v", client.Email, err)
+			return fmt.Errorf("ошибка подготовки запроса: %v", err)
 		}
-		if rowsAffected > 0 {
-			addedUsers = append(addedUsers, client.Email)
-		}
-	}
+		defer stmt.Close()
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("error committing transaction: %v", err)
+		for _, client := range clients {
+			result, err := stmt.Exec(client.Email, client.ID, "0", "true", currentTime)
+			if err != nil {
+				return fmt.Errorf("ошибка вставки клиента %s: %v", client.Email, err)
+			}
+
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("ошибка получения RowsAffected для клиента %s: %v", client.Email, err)
+			}
+			if rowsAffected > 0 {
+				addedUsers = append(addedUsers, client.Email)
+			}
+		}
+
+		return tx.Commit()
+	})
+	if err != nil {
+		log.Printf("Error in AddUserToDB: %v [%v]", err, time.Since(start))
+		return err
 	}
 
 	if len(addedUsers) > 0 {
-		log.Printf("Users successfully added to database: %s [%v]", strings.Join(addedUsers, ", "), time.Since(start))
+		log.Printf("Пользователи успешно добавлены в базу данных: %s [%v]", strings.Join(addedUsers, ", "), time.Since(start))
 	}
-
 	return nil
 }
 
-func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
+func DelUserFromDB(manager *manager.DatabaseManager, cfg *config.Config) error {
+	start := time.Now()
 	var clients []config.XrayClient
 	switch cfg.V2rayStat.Type {
 	case "xray":
@@ -188,27 +176,37 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 		clients = extractUsersSingboxServer(cfg)
 	}
 
-	start := time.Now()
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	rows, err := memDB.Query("SELECT user FROM clients_stats")
-	if err != nil {
-		return fmt.Errorf("error executing query: %v", err)
-	}
-	defer rows.Close()
-
 	var usersDB []string
-	for rows.Next() {
-		var user string
-		if err := rows.Scan(&user); err != nil {
-			return fmt.Errorf("error scanning row: %v", err)
+	err := manager.Execute(func(db *sql.DB) error { // Низкий приоритет, так как это операция чтения
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
 		}
-		usersDB = append(usersDB, user)
+		defer tx.Rollback()
+
+		rows, err := tx.Query("SELECT user FROM clients_stats")
+		if err != nil {
+			return fmt.Errorf("ошибка выполнения запроса: %v", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var user string
+			if err := rows.Scan(&user); err != nil {
+				return fmt.Errorf("ошибка сканирования строки: %v", err)
+			}
+			usersDB = append(usersDB, user)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("ошибка итерации строк: %v", err)
+		}
+		return tx.Commit()
+	})
+	if err != nil {
+		log.Printf("Error in DelUserFromDB (reading users): %v [%v]", err, time.Since(start))
+		return err
 	}
 
-	var Queries string
 	var deletedUsers []string
 	for _, user := range usersDB {
 		found := false
@@ -219,53 +217,128 @@ func DelUserFromDB(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error
 			}
 		}
 		if !found {
-			Queries += fmt.Sprintf("DELETE FROM clients_stats WHERE user = '%s'; ", user)
 			deletedUsers = append(deletedUsers, user)
 		}
 	}
 
-	if Queries != "" {
-		_, err := memDB.Exec(Queries)
+	if len(deletedUsers) > 0 {
+		err = manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+			tx, err := db.Begin()
+			if err != nil {
+				return fmt.Errorf("ошибка начала транзакции: %v", err)
+			}
+			defer tx.Rollback()
+
+			stmt, err := tx.Prepare("DELETE FROM clients_stats WHERE user = ?")
+			if err != nil {
+				return fmt.Errorf("ошибка подготовки запроса: %v", err)
+			}
+			defer stmt.Close()
+
+			for _, user := range deletedUsers {
+				_, err := stmt.Exec(user)
+				if err != nil {
+					return fmt.Errorf("ошибка удаления пользователя %s: %v", user, err)
+				}
+			}
+
+			return tx.Commit()
+		})
 		if err != nil {
-			return fmt.Errorf("error executing transaction: %v", err)
+			log.Printf("Error in DelUserFromDB (deleting users): %v [%v]", err, time.Since(start))
+			return err
 		}
-		log.Printf("Users successfully deleted from database: %s [%v]", strings.Join(deletedUsers, ", "), time.Since(start))
+		log.Printf("Пользователи успешно удалены из базы данных: %s [%v]", strings.Join(deletedUsers, ", "), time.Since(start))
 	}
-
 	return nil
 }
 
-func UpdateIPInDB(tx *sql.Tx, user string, ipList []string) error {
+func UpdateIPInDB(manager *manager.DatabaseManager, user string, ipList []string) error {
+	start := time.Now()
 	ipStr := strings.Join(ipList, ",")
-	query := `UPDATE clients_stats SET ips = ? WHERE user = ?`
-	_, err := tx.Exec(query, ipStr, user)
+
+	err := manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
+		}
+		defer tx.Rollback()
+
+		_, err = tx.Exec("UPDATE clients_stats SET ips = ? WHERE user = ?", ipStr, user)
+		if err != nil {
+			return fmt.Errorf("ошибка обновления IPs для пользователя %s: %v", user, err)
+		}
+
+		return tx.Commit()
+	})
 	if err != nil {
-		return fmt.Errorf("error updating data: %v", err)
+		log.Printf("Error in UpdateIPInDB for user %s: %v [%v]", user, err, time.Since(start))
+		return err
 	}
+
 	return nil
 }
 
-func UpdateEnabledInDB(memDB *sql.DB, dbMutex *sync.Mutex, user string, enabled bool) {
+func UpsertDNSRecordsBatch(manager *manager.DatabaseManager, dnsStats map[string]map[string]int) error {
+	return manager.Execute(func(db *sql.DB) error { // Низкий приоритет
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
+		}
+		defer tx.Rollback()
+
+		for user, domains := range dnsStats {
+			for domain, count := range domains {
+				_, err := tx.Exec(`
+					INSERT INTO dns_stats (user, domain, count)
+					VALUES (?, ?, ?)
+					ON CONFLICT(user, domain)
+					DO UPDATE SET count = count + ?`,
+					user, domain, count, count)
+				if err != nil {
+					tx.Rollback()
+					return fmt.Errorf("ошибка выполнения запроса для %s/%s: %v", user, domain, err)
+				}
+			}
+		}
+		return tx.Commit()
+	})
+}
+
+func UpdateEnabledInDB(manager *manager.DatabaseManager, user string, enabled bool) error {
+	start := time.Now()
 	enabledStr := "false"
 	if enabled {
 		enabledStr = "true"
 	}
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
+	err := manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
+		}
+		defer tx.Rollback()
 
-	_, err := memDB.Exec("UPDATE clients_stats SET enabled = ? WHERE user = ?", enabledStr, user)
+		_, err = tx.Exec("UPDATE clients_stats SET enabled = ? WHERE user = ?", enabledStr, user)
+		if err != nil {
+			return fmt.Errorf("ошибка обновления статуса enabled для пользователя %s: %v", user, err)
+		}
+
+		return tx.Commit()
+	})
 	if err != nil {
-		log.Printf("Error updating database for user %s: %v", user, err)
-	} else {
-		// log.Printf("Updated enabled status for %s to %s", user, enabledStr)
+		log.Printf("Error in UpdateEnabledInDB for user %s: %v [%v]", user, err, time.Since(start))
+		return err
 	}
+
+	log.Printf("Enabled status updated for user %s to %s [%v]", user, enabledStr, time.Since(start))
+	return nil
 }
 
 func formatDate(subEnd string) string {
 	t, err := time.ParseInLocation("2006-01-02-15", subEnd, time.Local)
 	if err != nil {
-		log.Printf("Error parsing date %s: %v", subEnd, err)
+		log.Printf("Ошибка парсинга даты %s: %v", subEnd, err)
 		return subEnd
 	}
 
@@ -278,7 +351,7 @@ func formatDate(subEnd string) string {
 func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
 	matches := dateOffsetRegex.FindStringSubmatch(offset)
 	if matches == nil {
-		return time.Time{}, fmt.Errorf("invalid format: %s", offset)
+		return time.Time{}, fmt.Errorf("неверный формат: %s", offset)
 	}
 
 	sign := matches[1]
@@ -300,78 +373,130 @@ func parseAndAdjustDate(offset string, baseDate time.Time) (time.Time, error) {
 	return newDate, nil
 }
 
-func AdjustDateOffset(memDB *sql.DB, dbMutex *sync.Mutex, user, offset string, baseDate time.Time) error {
+func AdjustDateOffset(manager *manager.DatabaseManager, user, offset string, baseDate time.Time) error {
 	start := time.Now()
 	offset = strings.TrimSpace(offset)
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
 	if offset == "0" {
-		_, err := memDB.Exec("UPDATE clients_stats SET sub_end = '' WHERE user = ?", user)
+		err := manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+			tx, err := db.Begin()
+			if err != nil {
+				return fmt.Errorf("ошибка начала транзакции: %v", err)
+			}
+			defer tx.Rollback()
+
+			result, err := tx.Exec("UPDATE clients_stats SET sub_end = '' WHERE user = ?", user)
+			if err != nil {
+				return fmt.Errorf("ошибка обновления базы данных: %v", err)
+			}
+
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return fmt.Errorf("ошибка проверки затронутых строк: %v", err)
+			}
+			if rowsAffected == 0 {
+				return fmt.Errorf("пользователь %s не найден", user)
+			}
+
+			return tx.Commit()
+		})
 		if err != nil {
-			return fmt.Errorf("error updating database: %v", err)
+			log.Printf("Error in AdjustDateOffset (resetting subscription): %v [%v]", err, time.Since(start))
+			return err
 		}
-		log.Printf("Unlimited time restriction set for user %s", user)
+		log.Printf("Установлено неограниченное время для пользователя %s [%v]", user, time.Since(start))
 		return nil
 	}
 
 	newDate, err := parseAndAdjustDate(offset, baseDate)
 	if err != nil {
-		return fmt.Errorf("invalid offset format: %v", err)
+		log.Printf("Error in AdjustDateOffset (parsing date): %v [%v]", err, time.Since(start))
+		return fmt.Errorf("неверный формат смещения: %v", err)
 	}
 
-	_, err = memDB.Exec("UPDATE clients_stats SET sub_end = ? WHERE user = ?", newDate.Format("2006-01-02-15"), user)
+	err = manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
+		}
+		defer tx.Rollback()
+
+		result, err := tx.Exec("UPDATE clients_stats SET sub_end = ? WHERE user = ?", newDate.Format("2006-01-02-15"), user)
+		if err != nil {
+			return fmt.Errorf("ошибка обновления базы данных: %v", err)
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("ошибка проверки затронутых строк: %v", err)
+		}
+		if rowsAffected == 0 {
+			return fmt.Errorf("пользователь %s не найден", user)
+		}
+
+		return tx.Commit()
+	})
 	if err != nil {
-		return fmt.Errorf("error updating database: %v", err)
+		log.Printf("Error in AdjustDateOffset (updating subscription): %v [%v]", err, time.Since(start))
+		return err
 	}
 
-	log.Printf("Subscription date for %s updated: %s -> %s (offset: %s) [%v]", user, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset, time.Since(start))
+	log.Printf("Дата подписки для %s обновлена: %s -> %s (смещение: %s) [%v]", user, baseDate.Format("2006-01-02-15"), newDate.Format("2006-01-02-15"), offset, time.Since(start))
 	return nil
 }
 
-func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) {
+func CheckExpiredSubscriptions(manager *manager.DatabaseManager, cfg *config.Config) error {
 	start := time.Now()
 
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	rows, err := memDB.Query("SELECT user, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
-	if err != nil {
-		log.Printf("Error querying database: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	type subscription struct {
+	var subscriptions []struct {
 		User    string
 		SubEnd  string
 		UUID    string
 		Enabled string
 		Renew   int
 	}
-	var subscriptions []subscription
-
-	for rows.Next() {
-		var s subscription
-		err := rows.Scan(&s.User, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew)
+	err := manager.Execute(func(db *sql.DB) error { // Низкий приоритет, так как это операция чтения
+		tx, err := db.Begin()
 		if err != nil {
-			log.Printf("Error scanning row: %v", err)
-			continue
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
 		}
-		subscriptions = append(subscriptions, s)
-	}
+		defer tx.Rollback()
 
-	if err = rows.Err(); err != nil {
-		log.Printf("Error processing rows: %v", err)
-		return
+		rows, err := tx.Query("SELECT user, sub_end, uuid, enabled, renew FROM clients_stats WHERE sub_end IS NOT NULL")
+		if err != nil {
+			return fmt.Errorf("ошибка выполнения запроса: %v", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var s struct {
+				User    string
+				SubEnd  string
+				UUID    string
+				Enabled string
+				Renew   int
+			}
+			if err := rows.Scan(&s.User, &s.SubEnd, &s.UUID, &s.Enabled, &s.Renew); err != nil {
+				log.Printf("Ошибка сканирования строки: %v [%v]", err, time.Since(start))
+				continue
+			}
+			subscriptions = append(subscriptions, s)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("ошибка итерации строк: %v", err)
+		}
+		return tx.Commit()
+	})
+	if err != nil {
+		log.Printf("Error in CheckExpiredSubscriptions (reading subscriptions): %v [%v]", err, time.Since(start))
+		return err
 	}
 
 	for _, s := range subscriptions {
 		if s.SubEnd != "" {
 			subEnd, err := time.Parse("2006-01-02-15", s.SubEnd)
 			if err != nil {
-				log.Printf("Error parsing date for %s: %v", s.User, err)
+				log.Printf("Ошибка парсинга даты для %s: %v [%v]", s.User, err, time.Since(start))
 				continue
 			}
 
@@ -381,31 +506,35 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 				notifiedMutex.Lock()
 				if canSendNotifications && !notifiedUsers[s.User] {
 					formattedDate := formatDate(s.SubEnd)
-					message := fmt.Sprintf("❌ Subscription expired\n\n"+
-						"Client:   *%s*\n"+
-						"Expiration date:   *%s*", s.User, formattedDate)
+					message := fmt.Sprintf("❌ Подписка истекла\n\n"+
+						"Клиент:   *%s*\n"+
+						"Дата окончания:   *%s*", s.User, formattedDate)
 					if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err == nil {
 						notifiedUsers[s.User] = true
+					} else {
+						log.Printf("Ошибка отправки уведомления для %s: %v [%v]", s.User, err, time.Since(start))
 					}
 				}
 				notifiedMutex.Unlock()
 
 				if s.Renew >= 1 {
 					offset := fmt.Sprintf("%d", s.Renew)
-					err = AdjustDateOffset(memDB, dbMutex, s.User, offset, start)
+					err = AdjustDateOffset(manager, s.User, offset, start)
 					if err != nil {
-						log.Printf("Error renewing subscription for %s: %v", s.User, err)
+						log.Printf("Ошибка продления подписки для %s: %v [%v]", s.User, err, time.Since(start))
 						continue
 					}
-					log.Printf("Auto-renewed subscription for user %s for %d days", s.User, s.Renew)
+					log.Printf("Автоматически продлена подписка для пользователя %s на %d дней [%v]", s.User, s.Renew, time.Since(start))
 
 					if canSendNotifications {
 						notifiedMutex.Lock()
-						message := fmt.Sprintf("✅ Subscription renewed\n\n"+
-							"Client:   *%s*\n"+
-							"Renewed for:   *%d days*", s.User, s.Renew)
+						message := fmt.Sprintf("✅ Подписка продлена\n\n"+
+							"Клиент:   *%s*\n"+
+							"Продлена на:   *%d дней*", s.User, s.Renew)
 						if err := telegram.SendNotification(cfg.Telegram.BotToken, cfg.Telegram.ChatID, message); err == nil {
 							renewNotifiedUsers[s.User] = true
+						} else {
+							log.Printf("Ошибка отправки уведомления о продлении для %s: %v [%v]", s.User, err, time.Since(start))
 						}
 						notifiedMutex.Unlock()
 					}
@@ -416,65 +545,88 @@ func CheckExpiredSubscriptions(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.C
 					notifiedMutex.Unlock()
 
 					if s.Enabled == "false" {
-						err = ToggleUserEnabled(s.User, true, cfg, memDB, dbMutex)
+						err = ToggleUserEnabled(s.User, true, cfg, manager)
 						if err != nil {
-							log.Printf("Error enabling user %s: %v", s.User, err)
+							log.Printf("Ошибка включения пользователя %s: %v [%v]", s.User, err, time.Since(start))
 							continue
 						}
-						UpdateEnabledInDB(memDB, dbMutex, s.User, true)
-						log.Printf("User %s enabled", s.User)
+						err = UpdateEnabledInDB(manager, s.User, true)
+						if err != nil {
+							log.Printf("Ошибка обновления статуса enabled для %s: %v [%v]", s.User, err, time.Since(start))
+							continue
+						}
+						log.Printf("Пользователь %s включен [%v]", s.User, time.Since(start))
 					}
 				} else if s.Enabled == "true" {
-					err = ToggleUserEnabled(s.User, false, cfg, memDB, dbMutex)
+					err = ToggleUserEnabled(s.User, false, cfg, manager)
 					if err != nil {
-						log.Printf("Error disabling user %s: %v", s.User, err)
+						log.Printf("Ошибка отключения пользователя %s: %v [%v]", s.User, err, time.Since(start))
 					} else {
-						log.Printf("User %s disabled", s.User)
+						log.Printf("Пользователь %s отключен [%v]", s.User, time.Since(start))
 					}
-					UpdateEnabledInDB(memDB, dbMutex, s.User, false)
+					err = UpdateEnabledInDB(manager, s.User, false)
+					if err != nil {
+						log.Printf("Ошибка обновления статуса enabled для %s: %v [%v]", s.User, err, time.Since(start))
+					}
 				}
 			} else {
 				if s.Enabled == "false" {
-					err = ToggleUserEnabled(s.User, true, cfg, memDB, dbMutex)
+					err = ToggleUserEnabled(s.User, true, cfg, manager)
 					if err != nil {
-						log.Printf("Error enabling user %s: %v", s.User, err)
+						log.Printf("Ошибка включения пользователя %s: %v [%v]", s.User, err, time.Since(start))
 						continue
 					}
-					UpdateEnabledInDB(memDB, dbMutex, s.User, true)
-					log.Printf("✅ Subscription resumed, user %s enabled (%s)", s.User, s.SubEnd)
+					err = UpdateEnabledInDB(manager, s.User, true)
+					if err != nil {
+						log.Printf("Ошибка обновления статуса enabled для %s: %v [%v]", s.User, err, time.Since(start))
+						continue
+					}
+					log.Printf("✅ Подписка возобновлена, пользователь %s включен (%s) [%v]", s.User, s.SubEnd, time.Since(start))
 				}
 			}
 		}
 	}
+	log.Printf("CheckExpiredSubscriptions completed successfully [%v]", time.Since(start))
+	return nil
 }
 
-func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config) error {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	// Получаем все теги из traffic_stats
-	rows, err := memDB.Query("SELECT source FROM traffic_stats")
-	if err != nil {
-		return fmt.Errorf("error retrieving tags from traffic_stats: %v", err)
-	}
-	defer rows.Close()
-
+func CleanInvalidTrafficTags(manager *manager.DatabaseManager, cfg *config.Config) error {
+	start := time.Now()
 	var trafficSources []string
-	for rows.Next() {
-		var source string
-		if err := rows.Scan(&source); err != nil {
-			return fmt.Errorf("error reading row from traffic_stats: %v", err)
+	err := manager.Execute(func(db *sql.DB) error { // Низкий приоритет, так как это операция чтения
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
 		}
-		trafficSources = append(trafficSources, source)
-	}
-	if err = rows.Err(); err != nil {
-		return fmt.Errorf("error processing rows from traffic_stats: %v", err)
+		defer tx.Rollback()
+
+		rows, err := tx.Query("SELECT source FROM traffic_stats")
+		if err != nil {
+			return fmt.Errorf("ошибка получения тегов из traffic_stats: %v", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var source string
+			if err := rows.Scan(&source); err != nil {
+				return fmt.Errorf("ошибка чтения строки из traffic_stats: %v", err)
+			}
+			trafficSources = append(trafficSources, source)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("ошибка итерации строк: %v", err)
+		}
+		return tx.Commit()
+	})
+	if err != nil {
+		log.Printf("Error in CleanInvalidTrafficTags (reading sources): %v [%v]", err, time.Since(start))
+		return err
 	}
 
-	// Извлекаем теги inbounds и outbounds из config.json
 	data, err := os.ReadFile(cfg.Core.Config)
 	if err != nil {
-		return fmt.Errorf("error reading config.json: %v", err)
+		log.Printf("Ошибка чтения config.json: %v [%v]", err, time.Since(start))
+		return fmt.Errorf("ошибка чтения config.json: %v", err)
 	}
 
 	validTags := make(map[string]bool)
@@ -482,7 +634,8 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 	case "xray":
 		var cfgXray config.ConfigXray
 		if err := json.Unmarshal(data, &cfgXray); err != nil {
-			return fmt.Errorf("error parsing JSON for xray: %v", err)
+			log.Printf("Ошибка разбора JSON для xray: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка разбора JSON для xray: %v", err)
 		}
 		for _, inbound := range cfgXray.Inbounds {
 			validTags[inbound.Tag] = true
@@ -495,7 +648,8 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 	case "singbox":
 		var cfgSingbox config.ConfigSingbox
 		if err := json.Unmarshal(data, &cfgSingbox); err != nil {
-			return fmt.Errorf("error parsing JSON for singbox: %v", err)
+			log.Printf("Ошибка разбора JSON для singbox: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка разбора JSON для singbox: %v", err)
 		}
 		for _, inbound := range cfgSingbox.Inbounds {
 			validTags[inbound.Tag] = true
@@ -507,43 +661,47 @@ func CleanInvalidTrafficTags(memDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Con
 		}
 	}
 
-	// Собираем теги для удаления
 	var invalidTags []string
-	var queries []string
 	for _, source := range trafficSources {
 		if !validTags[source] {
-			queries = append(queries, fmt.Sprintf("DELETE FROM traffic_stats WHERE source = '%s'", source))
 			invalidTags = append(invalidTags, source)
 		}
 	}
 
-	// Выполняем удаление
-	if len(queries) > 0 {
-		tx, err := memDB.Begin()
-		if err != nil {
-			return fmt.Errorf("error starting transaction: %v", err)
-		}
-
-		for _, query := range queries {
-			if _, err := tx.Exec(query); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("error executing delete query: %v", err)
+	if len(invalidTags) > 0 {
+		err = manager.ExecuteHighPriority(func(db *sql.DB) error { // Высокий приоритет, так как это операция записи
+			tx, err := db.Begin()
+			if err != nil {
+				return fmt.Errorf("ошибка начала транзакции: %v", err)
 			}
-		}
+			defer tx.Rollback()
 
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("error committing transaction: %v", err)
-		}
+			stmt, err := tx.Prepare("DELETE FROM traffic_stats WHERE source = ?")
+			if err != nil {
+				return fmt.Errorf("ошибка подготовки запроса: %v", err)
+			}
+			defer stmt.Close()
 
-		log.Printf("Deleted non-existent tags from traffic_stats: %s", strings.Join(invalidTags, ", "))
+			for _, source := range invalidTags {
+				_, err := stmt.Exec(source)
+				if err != nil {
+					return fmt.Errorf("ошибка удаления тега %s: %v", source, err)
+				}
+			}
+
+			return tx.Commit()
+		})
+		if err != nil {
+			log.Printf("Error in CleanInvalidTrafficTags (deleting tags): %v [%v]", err, time.Since(start))
+			return err
+		}
+		log.Printf("Удалены несуществующие теги из traffic_stats: %s [%v]", strings.Join(invalidTags, ", "), time.Since(start))
 	}
-
 	return nil
 }
 
-func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, memDB *sql.DB, dbMutex *sync.Mutex) error {
+func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, manager *manager.DatabaseManager) error {
 	start := time.Now()
-
 	mainConfigPath := cfg.Core.Config
 	disabledUsersPath := filepath.Join(cfg.Core.Dir, ".disabled_users")
 
@@ -554,34 +712,35 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 
 	switch cfg.V2rayStat.Type {
 	case "xray":
-		// Read main config for Xray
 		mainConfigData, err := os.ReadFile(mainConfigPath)
 		if err != nil {
-			return fmt.Errorf("error reading Xray main config: %v", err)
+			log.Printf("Ошибка чтения основного конфига Xray: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка чтения основного конфига Xray: %v", err)
 		}
 		var mainConfig config.ConfigXray
 		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-			return fmt.Errorf("error parsing Xray main config: %v", err)
+			log.Printf("Ошибка разбора основного конфига Xray: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка разбора основного конфига Xray: %v", err)
 		}
 
-		// Read disabled users config for Xray
 		var disabledConfig config.DisabledUsersConfigXray
 		disabledConfigData, err := os.ReadFile(disabledUsersPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
 			} else {
-				return fmt.Errorf("error reading Xray disabled users file: %v", err)
+				log.Printf("Ошибка чтения файла отключенных пользователей Xray: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка чтения файла отключенных пользователей Xray: %v", err)
 			}
 		} else if len(disabledConfigData) == 0 {
 			disabledConfig = config.DisabledUsersConfigXray{Inbounds: []config.XrayInbound{}}
 		} else {
 			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-				return fmt.Errorf("error parsing Xray disabled users file: %v", err)
+				log.Printf("Ошибка разбора файла отключенных пользователей Xray: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка разбора файла отключенных пользователей Xray: %v", err)
 			}
 		}
 
-		// Determine source and target for Xray
 		sourceInbounds := mainConfig.Inbounds
 		targetInbounds := disabledConfig.Inbounds
 		if enabled {
@@ -589,13 +748,12 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 			targetInbounds = mainConfig.Inbounds
 		}
 
-		// Collect users for Xray with deduplication by user and inbound tag
-		userMap := make(map[string]config.XrayClient) // Map tag -> client
+		userMap := make(map[string]config.XrayClient)
 		found := false
 		for i, inbound := range sourceInbounds {
 			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
 				newClients := make([]config.XrayClient, 0, len(inbound.Settings.Clients))
-				clientMap := make(map[string]bool) // Track unique users in inbound
+				clientMap := make(map[string]bool)
 				for _, client := range inbound.Settings.Clients {
 					if client.Email == userIdentifier {
 						if !clientMap[client.Email] {
@@ -615,21 +773,21 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 		}
 
 		if !found {
-			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols", userIdentifier)
+			log.Printf("Пользователь %s не найден в inbounds с протоколами vless или trojan [%v]", userIdentifier, time.Since(start))
+			return fmt.Errorf("пользователь %s не найден в inbounds с протоколами vless или trojan", userIdentifier)
 		}
 
-		// Check for duplicates in target inbounds for Xray
 		for _, inbound := range targetInbounds {
 			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
 				for _, client := range inbound.Settings.Clients {
 					if client.Email == userIdentifier {
-						return fmt.Errorf("user %s already exists in target Xray config with tag %s", userIdentifier, inbound.Tag)
+						log.Printf("Пользователь %s уже существует в целевом конфиге Xray с тегом %s [%v]", userIdentifier, inbound.Tag, time.Since(start))
+						return fmt.Errorf("пользователь %s уже существует в целевом конфиге Xray с тегом %s", userIdentifier, inbound.Tag)
 					}
 				}
 			}
 		}
 
-		// Add users to existing target inbounds for Xray
 		for i, inbound := range targetInbounds {
 			if inbound.Protocol == "vless" || inbound.Protocol == "trojan" {
 				if client, exists := userMap[inbound.Tag]; exists {
@@ -643,26 +801,24 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !clientMap[userIdentifier] {
 						newClients = append(newClients, client)
-						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
+						log.Printf("Пользователь %s %s в inbound с тегом %s для %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
 					}
 					targetInbounds[i].Settings.Clients = newClients
 				}
 			}
 		}
 
-		// Create new inbounds if they don’t exist in target config for Xray
 		for _, mainInbound := range mainConfig.Inbounds {
 			if (mainInbound.Protocol == "vless" || mainInbound.Protocol == "trojan") && !hasInboundXray(targetInbounds, mainInbound.Tag) {
 				if client, exists := userMap[mainInbound.Tag]; exists {
 					newInbound := mainInbound
 					newInbound.Settings.Clients = []config.XrayClient{client}
 					targetInbounds = append(targetInbounds, newInbound)
-					log.Printf("Created new inbound with tag %s for user %s in Xray", newInbound.Tag, userIdentifier)
+					log.Printf("Создан новый inbound с тегом %s для пользователя %s в Xray [%v]", newInbound.Tag, userIdentifier, time.Since(start))
 				}
 			}
 		}
 
-		// Update configs for Xray
 		if enabled {
 			mainConfig.Inbounds = targetInbounds
 			disabledConfig.Inbounds = sourceInbounds
@@ -671,59 +827,62 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 			disabledConfig.Inbounds = targetInbounds
 		}
 
-		// Save main config for Xray
 		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
 		if err != nil {
-			return fmt.Errorf("error serializing Xray main config: %v", err)
+			log.Printf("Ошибка сериализации основного конфига Xray: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка сериализации основного конфига Xray: %v", err)
 		}
 		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
-			return fmt.Errorf("error writing Xray main config: %v", err)
+			log.Printf("Ошибка записи основного конфига Xray: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка записи основного конфига Xray: %v", err)
 		}
 
-		// Save disabled users config for Xray
 		if len(disabledConfig.Inbounds) > 0 {
 			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
 			if err != nil {
-				return fmt.Errorf("error serializing Xray disabled users file: %v", err)
+				log.Printf("Ошибка сериализации файла отключенных пользователей Xray: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка сериализации файла отключенных пользователей Xray: %v", err)
 			}
 			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
-				return fmt.Errorf("error writing Xray disabled users file: %v", err)
+				log.Printf("Ошибка записи файла отключенных пользователей Xray: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка записи файла отключенных пользователей Xray: %v", err)
 			}
 		} else {
 			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-				log.Printf("Error removing empty .disabled_users for Xray: %v", err)
+				log.Printf("Ошибка удаления пустого файла .disabled_users для Xray: %v [%v]", err, time.Since(start))
 			}
 		}
 
 	case "singbox":
-		// Read main config for Singbox
 		mainConfigData, err := os.ReadFile(mainConfigPath)
 		if err != nil {
-			return fmt.Errorf("error reading Singbox main config: %v", err)
+			log.Printf("Ошибка чтения основного конфига Singbox: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка чтения основного конфига Singbox: %v", err)
 		}
 		var mainConfig config.ConfigSingbox
 		if err := json.Unmarshal(mainConfigData, &mainConfig); err != nil {
-			return fmt.Errorf("error parsing Singbox main config: %v", err)
+			log.Printf("Ошибка разбора основного конфига Singbox: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка разбора основного конфига Singbox: %v", err)
 		}
 
-		// Read disabled users config for Singbox
 		var disabledConfig config.DisabledUsersConfigSingbox
 		disabledConfigData, err := os.ReadFile(disabledUsersPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
 			} else {
-				return fmt.Errorf("error reading Singbox disabled users file: %v", err)
+				log.Printf("Ошибка чтения файла отключенных пользователей Singbox: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка чтения файла отключенных пользователей Singbox: %v", err)
 			}
 		} else if len(disabledConfigData) == 0 {
 			disabledConfig = config.DisabledUsersConfigSingbox{Inbounds: []config.SingboxInbound{}}
 		} else {
 			if err := json.Unmarshal(disabledConfigData, &disabledConfig); err != nil {
-				return fmt.Errorf("error parsing Singbox disabled users file: %v", err)
+				log.Printf("Ошибка разбора файла отключенных пользователей Singbox: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка разбора файла отключенных пользователей Singbox: %v", err)
 			}
 		}
 
-		// Determine source and target for Singbox
 		sourceInbounds := mainConfig.Inbounds
 		targetInbounds := disabledConfig.Inbounds
 		if enabled {
@@ -731,13 +890,12 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 			targetInbounds = mainConfig.Inbounds
 		}
 
-		// Collect users for Singbox with deduplication by name and inbound tag
-		userMap := make(map[string]config.SingboxClient) // Map tag -> user
+		userMap := make(map[string]config.SingboxClient)
 		found := false
 		for i, inbound := range sourceInbounds {
 			if inbound.Type == "vless" || inbound.Type == "trojan" {
 				newUsers := make([]config.SingboxClient, 0, len(inbound.Users))
-				userNameMap := make(map[string]bool) // Track unique names in inbound
+				userNameMap := make(map[string]bool)
 				for _, user := range inbound.Users {
 					if user.Name == userIdentifier {
 						if !userNameMap[user.Name] {
@@ -757,21 +915,21 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 		}
 
 		if !found {
-			return fmt.Errorf("user %s not found in inbounds with vless or trojan protocols for Singbox", userIdentifier)
+			log.Printf("Пользователь %s не найден в inbounds с протоколами vless или trojan для Singbox [%v]", userIdentifier, time.Since(start))
+			return fmt.Errorf("пользователь %s не найден в inbounds с протоколами vless или trojan для Singbox", userIdentifier)
 		}
 
-		// Check for duplicates in target inbounds for Singbox
 		for _, inbound := range targetInbounds {
 			if inbound.Type == "vless" || inbound.Type == "trojan" {
 				for _, user := range inbound.Users {
 					if user.Name == userIdentifier {
-						return fmt.Errorf("user %s already exists in target Singbox config with tag %s", userIdentifier, inbound.Tag)
+						log.Printf("Пользователь %s уже существует в целевом конфиге Singbox с тегом %s [%v]", userIdentifier, inbound.Tag, time.Since(start))
+						return fmt.Errorf("пользователь %s уже существует в целевом конфиге Singbox с тегом %s", userIdentifier, inbound.Tag)
 					}
 				}
 			}
 		}
 
-		// Add users to existing target inbounds for Singbox
 		for i, inbound := range targetInbounds {
 			if inbound.Type == "vless" || inbound.Type == "trojan" {
 				if user, exists := userMap[inbound.Tag]; exists {
@@ -785,26 +943,24 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 					}
 					if !userNameMap[userIdentifier] {
 						newUsers = append(newUsers, user)
-						log.Printf("User %s set to %s in inbound with tag %s for %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
+						log.Printf("Пользователь %s %s в inbound с тегом %s для %s [%v]", userIdentifier, status, inbound.Tag, cfg.V2rayStat.Type, time.Since(start))
 					}
 					targetInbounds[i].Users = newUsers
 				}
 			}
 		}
 
-		// Create new inbounds if they don’t exist in target config for Singbox
 		for _, mainInbound := range mainConfig.Inbounds {
 			if (mainInbound.Type == "vless" || mainInbound.Type == "trojan") && !hasInboundSingbox(targetInbounds, mainInbound.Tag) {
 				if user, exists := userMap[mainInbound.Tag]; exists {
 					newInbound := mainInbound
 					newInbound.Users = []config.SingboxClient{user}
 					targetInbounds = append(targetInbounds, newInbound)
-					log.Printf("Created new inbound with tag %s for user %s in Singbox", newInbound.Tag, userIdentifier)
+					log.Printf("Создан новый inbound с тегом %s для пользователя %s в Singbox [%v]", newInbound.Tag, userIdentifier, time.Since(start))
 				}
 			}
 		}
 
-		// Update configs for Singbox
 		if enabled {
 			mainConfig.Inbounds = targetInbounds
 			disabledConfig.Inbounds = sourceInbounds
@@ -813,32 +969,33 @@ func ToggleUserEnabled(userIdentifier string, enabled bool, cfg *config.Config, 
 			disabledConfig.Inbounds = targetInbounds
 		}
 
-		// Save main config for Singbox
 		mainConfigData, err = json.MarshalIndent(mainConfig, "", "  ")
 		if err != nil {
-			return fmt.Errorf("error serializing Singbox main config: %v", err)
+			log.Printf("Ошибка сериализации основного конфига Singbox: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка сериализации основного конфига Singbox: %v", err)
 		}
 		if err := os.WriteFile(mainConfigPath, mainConfigData, 0644); err != nil {
-			return fmt.Errorf("error writing Singbox main config: %v", err)
+			log.Printf("Ошибка записи основного конфига Singbox: %v [%v]", err, time.Since(start))
+			return fmt.Errorf("ошибка записи основного конфига Singbox: %v", err)
 		}
 
-		// Save disabled users config for Singbox
 		if len(disabledConfig.Inbounds) > 0 {
 			disabledConfigData, err = json.MarshalIndent(disabledConfig, "", "  ")
 			if err != nil {
-				return fmt.Errorf("error serializing Singbox disabled users file: %v", err)
+				log.Printf("Ошибка сериализации файла отключенных пользователей Singbox: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка сериализации файла отключенных пользователей Singbox: %v", err)
 			}
 			if err := os.WriteFile(disabledUsersPath, disabledConfigData, 0644); err != nil {
-				return fmt.Errorf("error writing Singbox disabled users file: %v", err)
+				log.Printf("Ошибка записи файла отключенных пользователей Singbox: %v [%v]", err, time.Since(start))
+				return fmt.Errorf("ошибка записи файла отключенных пользователей Singbox: %v", err)
 			}
 		} else {
 			if err := os.Remove(disabledUsersPath); err != nil && !os.IsNotExist(err) {
-				log.Printf("Error removing empty .disabled_users for Singbox: %v", err)
+				log.Printf("Ошибка удаления пустого файла .disabled_users для Singbox: %v [%v]", err, time.Since(start))
 			}
 		}
 	}
 
-	UpdateEnabledInDB(memDB, dbMutex, userIdentifier, enabled)
 	return nil
 }
 
@@ -860,118 +1017,66 @@ func hasInboundSingbox(inbounds []config.SingboxInbound, tag string) bool {
 	return false
 }
 
-// LoadIsInactiveFromLastSeen загружает статус неактивности пользователей из колонки last_seen
-func LoadIsInactiveFromLastSeen(db *sql.DB, dbMutex *sync.Mutex) (map[string]bool, error) {
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	rows, err := db.Query("SELECT user, last_seen FROM clients_stats")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
+func LoadIsInactiveFromLastSeen(manager *manager.DatabaseManager) (map[string]bool, error) {
+	start := time.Now()
 	isInactive := make(map[string]bool)
-	for rows.Next() {
-		var user, lastSeen string
-		if err := rows.Scan(&user, &lastSeen); err != nil {
-			log.Printf("Ошибка сканирования строки для пользователя %s: %v", user, err)
-			continue
+	err := manager.Execute(func(db *sql.DB) error { // Низкий приоритет, так как это операция чтения
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("ошибка начала транзакции: %v", err)
 		}
-		if lastSeen == "online" {
-			isInactive[user] = false
-		} else {
-			isInactive[user] = true
+		defer tx.Rollback()
+
+		rows, err := tx.Query("SELECT user, last_seen FROM clients_stats")
+		if err != nil {
+			return fmt.Errorf("ошибка выполнения запроса: %v", err)
 		}
-	}
-	// Проверяем ошибки после перебора строк
-	if err := rows.Err(); err != nil {
+		defer rows.Close()
+
+		for rows.Next() {
+			var user, lastSeen string
+			if err := rows.Scan(&user, &lastSeen); err != nil {
+				log.Printf("Ошибка сканирования строки для пользователя %s: %v [%v]", user, err, time.Since(start))
+				continue
+			}
+			if lastSeen == "online" {
+				isInactive[user] = false
+			} else {
+				isInactive[user] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("ошибка итерации строк: %v", err)
+		}
+		return tx.Commit()
+	})
+	if err != nil {
+		log.Printf("Error in LoadIsInactiveFromLastSeen: %v [%v]", err, time.Since(start))
 		return nil, err
 	}
-
 	return isInactive, nil
 }
 
-// SyncDB копирует данные из исходной базы (srcDB) в целевую базу (destDB) с использованием SQLite Backup API
-func SyncDB(srcDB, destDB *sql.DB, dbMutex *sync.Mutex, direction string) error {
-	start := time.Now()
-
-	dbMutex.Lock()
-	defer dbMutex.Unlock()
-
-	// Получаем соединения к исходной и целевой базам
-	srcConn, err := srcDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get connection to source database: %v", err)
-	}
-	defer srcConn.Close()
-
-	destConn, err := destDB.Conn(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to get connection to destination database: %v", err)
-	}
-	defer destConn.Close()
-
-	// Выполняем резервное копирование через Raw доступ к драйверу
-	err = srcConn.Raw(func(srcDriverConn interface{}) error {
-		return destConn.Raw(func(destDriverConn interface{}) error {
-			// Приводим соединения к типу *sqlite3.SQLiteConn
-			srcConnSQLite, ok := srcDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("failed to cast source connection to *sqlite3.SQLiteConn")
-			}
-			destConnSQLite, ok := destDriverConn.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("failed to cast destination connection to *sqlite3.SQLiteConn")
-			}
-
-			// Инициализируем резервное копирование
-			backup, err := destConnSQLite.Backup("main", srcConnSQLite, "main")
-			if err != nil {
-				return fmt.Errorf("failed to initialize backup: %v", err)
-			}
-			defer backup.Finish()
-
-			// Копируем 500 страниц за один шаг
-			for {
-				finished, err := backup.Step(500)
-				if err != nil {
-					return fmt.Errorf("backup step error: %v", err)
-				}
-				if finished {
-					break
-				}
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		log.Printf("Error synchronizing database (%s): %v", direction, err)
-		return fmt.Errorf("error synchronizing database (%s): %v", direction, err)
-	}
-
-	log.Printf("Database synchronized successfully (%s) [%v]", direction, time.Since(start))
-	return nil
-}
-
-// InitDB инициализирует структуру таблиц в базе данных
 func InitDB(db *sql.DB, dbType string) error {
 	start := time.Now()
 
 	var tableCount int
 	err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clients_stats'").Scan(&tableCount)
 	if err != nil {
-		return fmt.Errorf("error checking table existence for %s database: %v", dbType, err)
+		log.Printf("Ошибка проверки существования таблицы для базы %s: %v [%v]", dbType, err, time.Since(start))
+		return fmt.Errorf("ошибка проверки существования таблицы для базы %s: %v", dbType, err)
 	}
 	if tableCount > 0 {
-		return nil // Таблицы уже существуют, инициализация не требуется
+		return nil
 	}
 
-	_, err = db.Exec(`
+	sqlStmt := `
         PRAGMA cache_size = 2000;
-        PRAGMA journal_mode = MEMORY;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA busy_timeout = 5000;
 
-        -- Create or update clients_stats table
         CREATE TABLE IF NOT EXISTS clients_stats (
             user TEXT PRIMARY KEY,
             uuid TEXT,
@@ -989,7 +1094,6 @@ func InitDB(db *sql.DB, dbType string) error {
             created TEXT
         );
 
-        -- Create traffic_stats table
         CREATE TABLE IF NOT EXISTS traffic_stats (
             source TEXT PRIMARY KEY,
             rate INTEGER DEFAULT 0,
@@ -999,158 +1103,101 @@ func InitDB(db *sql.DB, dbType string) error {
             sess_downlink INTEGER DEFAULT 0
         );
 
-        -- Create dns_stats table
         CREATE TABLE IF NOT EXISTS dns_stats (
             user TEXT NOT NULL,
             count INTEGER DEFAULT 1,
             domain TEXT NOT NULL,
             PRIMARY KEY (user, domain)
         );
-    `)
-	if err != nil {
-		return fmt.Errorf("error executing SQL query: %v", err)
+
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_user ON clients_stats(user);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_renew ON clients_stats(renew);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_uplink ON clients_stats(sess_uplink);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_downlink ON clients_stats(sess_downlink);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_uplink ON clients_stats(uplink);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips);
+        CREATE INDEX IF NOT EXISTS idx_clients_stats_last_seen ON clients_stats(last_seen);
+    `
+	if _, err = db.Exec(sqlStmt); err != nil {
+		log.Printf("Ошибка выполнения SQL запроса: %v [%v]", err, time.Since(start))
+		return fmt.Errorf("ошибка выполнения SQL запроса: %v", err)
 	}
 
-	// Создание индексов для таблицы clients_stats
-	indexQueries := []string{
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_user ON clients_stats(user)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_rate ON clients_stats(rate)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_enabled ON clients_stats(enabled)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sub_end ON clients_stats(sub_end)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_renew ON clients_stats(renew)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_uplink ON clients_stats(sess_uplink)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_sess_downlink ON clients_stats(sess_downlink)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_uplink ON clients_stats(uplink)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_downlink ON clients_stats(downlink)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_lim_ip ON clients_stats(lim_ip)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_ips ON clients_stats(ips)",
-		"CREATE INDEX IF NOT EXISTS idx_clients_stats_last_seen ON clients_stats(last_seen)",
-	}
-
-	for _, indexQuery := range indexQueries {
-		if _, err := db.Exec(indexQuery); err != nil {
-			return fmt.Errorf("error creating index: %v", err)
-		}
-	}
-
-	log.Printf("%s database initialized successfully [%v]", strings.Title(dbType), time.Since(start))
 	return nil
 }
 
-// InitDatabase инициализирует in-memory и file базы данных
-func InitDatabase(cfg *config.Config, dbMutex *sync.Mutex) (memDB, fileDB *sql.DB, err error) {
-	// Создаем in-memory базу
+func InitDatabase(cfg *config.Config) (memDB, fileDB *sql.DB, err error) {
+	start := time.Now()
 	memDB, err = sql.Open("sqlite3", ":memory:")
 	if err != nil {
-		log.Printf("Error creating in-memory database: %v", err)
-		return nil, nil, fmt.Errorf("failed to create in-memory database: %v", err)
+		log.Printf("Ошибка создания in-memory базы данных: %v [%v]", err, time.Since(start))
+		return nil, nil, fmt.Errorf("не удалось создать in-memory базу данных: %v", err)
 	}
+	memDB.SetMaxOpenConns(1)
+	memDB.SetMaxIdleConns(1)
 
-	// Инициализируем in-memory базу
 	if err = InitDB(memDB, "in-memory"); err != nil {
-		log.Printf("Error initializing in-memory database: %v", err)
+		log.Printf("Ошибка инициализации in-memory базы данных: %v [%v]", err, time.Since(start))
 		memDB.Close()
-		return nil, nil, fmt.Errorf("failed to initialize in-memory database: %v", err)
+		return nil, nil, fmt.Errorf("не удалось инициализировать in-memory базу данных: %v", err)
 	}
 
-	// Открываем или создаем файловую базу
 	fileDB, err = sql.Open("sqlite3", cfg.Paths.Database)
 	if err != nil {
-		log.Printf("Error opening file database: %v", err)
+		log.Printf("Ошибка открытия файловой базы данных: %v [%v]", err, time.Since(start))
 		memDB.Close()
-		return nil, nil, fmt.Errorf("failed to open file database: %v", err)
+		return nil, nil, fmt.Errorf("не удалось открыть файловую базу данных: %v", err)
 	}
+	fileDB.SetMaxOpenConns(1)
+	fileDB.SetMaxIdleConns(1)
 
-	// Оптимизация файловой базы
-	_, err = fileDB.Exec(`
-        PRAGMA journal_mode = WAL;
-        PRAGMA synchronous = NORMAL;
-        PRAGMA temp_store = MEMORY;
-    `)
-	if err != nil {
-		log.Printf("Error setting PRAGMA on file database: %v", err)
-		memDB.Close()
-		fileDB.Close()
-		return nil, nil, fmt.Errorf("error setting PRAGMA on file database: %v", err)
-	}
-
-	// Проверяем существование файла базы данных
 	fileExists := true
 	if _, err := os.Stat(cfg.Paths.Database); os.IsNotExist(err) {
 		fileExists = false
-		log.Printf("File database %s does not exist, will create new file database", cfg.Paths.Database)
 	} else if err != nil {
-		log.Printf("Error checking file database %s: %v", cfg.Paths.Database, err)
+		log.Printf("Ошибка проверки файла базы данных %s: %v [%v]", cfg.Paths.Database, err, time.Since(start))
 		memDB.Close()
 		fileDB.Close()
-		return nil, nil, fmt.Errorf("error checking file database: %v", err)
+		return nil, nil, fmt.Errorf("ошибка проверки файла базы данных: %v", err)
 	}
 
 	if fileExists {
-		// Проверяем целостность базы
-		_, err = fileDB.Exec("SELECT count(*) FROM clients_stats")
-		if err != nil {
-			fileDB.Close()
-			// Удаляем поврежденный файл
-			if err := os.Remove(cfg.Paths.Database); err != nil {
-				log.Printf("Error removing corrupted database file: %v", err)
-				memDB.Close()
-				return nil, nil, fmt.Errorf("error removing corrupted database file: %v", err)
-			}
-			// Создаем новую файловую базу
-			fileDB, err = sql.Open("sqlite3", cfg.Paths.Database)
+		var tableCount int
+		err = fileDB.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='clients_stats'").Scan(&tableCount)
+		if err == nil && tableCount > 0 {
+			// Синхронизация file -> memory
+			tempManager, err := manager.NewDatabaseManager(fileDB, context.Background(), 1, 50, 100, cfg)
 			if err != nil {
-				log.Printf("Error creating new file database: %v", err)
-				memDB.Close()
-				return nil, nil, fmt.Errorf("failed to create new file database: %v", err)
-			}
-			// Повторно применяем оптимизации
-			_, err = fileDB.Exec(`
-                PRAGMA journal_mode = WAL;
-                PRAGMA synchronous = NORMAL;
-                PRAGMA temp_store = MEMORY;
-            `)
-			if err != nil {
-				log.Printf("Error setting PRAGMA on new file database: %v", err)
+				log.Printf("Ошибка создания временного DatabaseManager: %v [%v]", err, time.Since(start))
 				memDB.Close()
 				fileDB.Close()
-				return nil, nil, fmt.Errorf("error setting PRAGMA on new file database: %v", err)
+				return nil, nil, fmt.Errorf("ошибка создания временного DatabaseManager: %v", err)
 			}
-			// Инициализируем новую файловую базу
-			if err = InitDB(fileDB, "file"); err != nil {
-				log.Printf("Error initializing new file database: %v", err)
-				memDB.Close()
-				fileDB.Close()
-				return nil, nil, fmt.Errorf("failed to initialize new file database: %v", err)
+			syncCtx, syncCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err = tempManager.SyncDBWithContext(syncCtx, memDB, "file to memory"); err != nil {
+				log.Printf("Ошибка синхронизации базы данных (file to memory): %v [%v]", err, time.Since(start))
 			}
-		} else {
-			// База цела, инициализируем и синхронизируем данные из файла в память
-			if err = InitDB(fileDB, "file"); err != nil {
-				log.Printf("Error initializing file database: %v", err)
-				memDB.Close()
-				fileDB.Close()
-				return nil, nil, fmt.Errorf("failed to initialize file database: %v", err)
-			}
-			// Синхронизируем данные из файла в память
-			if err = SyncDB(fileDB, memDB, dbMutex, "file to memory"); err != nil {
-				log.Printf("Error synchronizing database (file to memory): %v", err)
-			}
+			syncCancel()
+			tempManager.Close()
 		}
-	} else {
-		// Файла нет, инициализируем новую файловую базу
-		if err = InitDB(fileDB, "file"); err != nil {
-			log.Printf("Error initializing new file database: %v", err)
-			memDB.Close()
-			fileDB.Close()
-			return nil, nil, fmt.Errorf("failed to initialize new file database: %v", err)
-		}
+	}
+
+	if err = InitDB(fileDB, "file"); err != nil {
+		log.Printf("Ошибка инициализации файловой базы данных: %v [%v]", err, time.Since(start))
+		memDB.Close()
+		fileDB.Close()
+		return nil, nil, fmt.Errorf("не удалось инициализировать файловую базу данных: %v", err)
 	}
 
 	return memDB, fileDB, nil
 }
 
-// Запуск задачи синхронизации базы и проверки подписок
-func MonitorSubscriptionsAndSync(ctx context.Context, memDB, fileDB *sql.DB, dbMutex *sync.Mutex, cfg *config.Config, wg *sync.WaitGroup) {
+func MonitorSubscriptionsAndSync(ctx context.Context, manager *manager.DatabaseManager, fileDB *sql.DB, cfg *config.Config, wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1161,18 +1208,20 @@ func MonitorSubscriptionsAndSync(ctx context.Context, memDB, fileDB *sql.DB, dbM
 		for {
 			select {
 			case <-ticker.C:
-				if err := CleanInvalidTrafficTags(memDB, dbMutex, cfg); err != nil {
-					log.Printf("Error cleaning non-existent tags: %v", err)
+				if err := CleanInvalidTrafficTags(manager, cfg); err != nil {
+					log.Printf("Ошибка очистки несуществующих тегов: %v", err)
 				}
-				CheckExpiredSubscriptions(memDB, dbMutex, cfg)
-
-				if err := SyncDB(memDB, fileDB, dbMutex, "memory to file"); err != nil {
-					log.Printf("Error synchronizing database: %v", err)
+				if err := CheckExpiredSubscriptions(manager, cfg); err != nil {
+					log.Printf("Ошибка проверки подписок: %v", err)
 				}
+				syncCtx, syncCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if err := manager.SyncDBWithContext(syncCtx, fileDB, "memory to file"); err != nil {
+					log.Printf("Ошибка периодической синхронизации базы данных: %v", err)
+				} else {
+					log.Printf("Периодическая синхронизация базы данных (memory to file) выполнена успешно")
+				}
+				syncCancel()
 			case <-ctx.Done():
-				if err := SyncDB(memDB, fileDB, dbMutex, "memory to file"); err != nil {
-					log.Printf("Error synchronizing database: %v", err)
-				}
 				return
 			}
 		}

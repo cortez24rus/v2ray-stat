@@ -15,7 +15,7 @@ func SendNotification(token, chatID, message string) error {
 		Hostname = "unknown"
 	}
 
-	formattedMessage := fmt.Sprintf("Hostname: *%s*\n\n%s", Hostname, message)
+	formattedMessage := fmt.Sprintf("💻 Host: *%s*\n\n%s", Hostname, message)
 	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage?parse_mode=markdown", token)
 	data := url.Values{
 		"chat_id": {chatID},
